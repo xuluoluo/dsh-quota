@@ -1,0 +1,298 @@
+// The Client bundle, driven without a browser: a small hooks runtime expands
+// the components, a fake fetch answers the Host routes, and the whole path —
+// register → read → render → act — is checked through the trees the components
+// actually produce.
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+let failures = 0
+const check = (name, ok, detail = '') => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `  — ${detail}`}`)
+  if (!ok) failures += 1
+}
+
+// —— 最小 hooks 运行时 ——
+function createMiniReact() {
+  const instances = new Map()
+  let current = null
+  let root = null
+  let tree = null
+  let scheduled = false
+
+  const instanceOf = (fn) => {
+    if (!instances.has(fn)) instances.set(fn, { hooks: [], effects: new Set() })
+    return instances.get(fn)
+  }
+
+  const React = {
+    createElement(type, props, ...children) {
+      return { type, props: props ?? {}, children: children.flat() }
+    },
+    useState(initial) {
+      const inst = current
+      const index = inst.index++
+      if (!(index in inst.hooks)) inst.hooks[index] = initial
+      const set = (value) => {
+        const next = typeof value === 'function' ? value(inst.hooks[index]) : value
+        if (next === inst.hooks[index]) return
+        inst.hooks[index] = next
+        schedule()
+      }
+      return [inst.hooks[index], set]
+    },
+    useEffect(fn) {
+      const inst = current
+      const index = inst.index++
+      if (inst.effects.has(index)) return
+      inst.effects.add(index)
+      fn()
+    },
+  }
+
+  function expand(node) {
+    if (Array.isArray(node)) return node.map(expand)
+    if (node === null || node === undefined) return node
+    if (typeof node !== 'object') return node
+    if (typeof node.type === 'function') {
+      const inst = instanceOf(node.type)
+      const previous = current
+      current = inst
+      inst.index = 0
+      let out
+      try {
+        out = node.type({ ...node.props, children: node.children })
+      } finally {
+        current = previous
+      }
+      return expand(out)
+    }
+    return { type: node.type, props: node.props ?? {}, children: (node.children ?? []).map(expand) }
+  }
+
+  function draw() {
+    tree = root === null ? null : expand(root)
+    return tree
+  }
+
+  function schedule() {
+    if (scheduled) return
+    scheduled = true
+    setTimeout(() => {
+      scheduled = false
+      draw()
+    }, 0)
+  }
+
+  return {
+    React,
+    mount(component, props = {}) {
+      root = { type: component, props, children: [] }
+      return draw()
+    },
+    get tree() { return tree },
+  }
+}
+
+function textsOf(node, out = []) {
+  if (node === null || node === undefined || node === false) return out
+  if (Array.isArray(node)) { node.forEach((entry) => textsOf(entry, out)); return out }
+  if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+  if (node.children) node.children.forEach((entry) => textsOf(entry, out))
+  return out
+}
+
+function elements(node, out = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return out
+  if (Array.isArray(node)) { node.forEach((entry) => elements(entry, out)); return out }
+  if (node.type) out.push(node)
+  for (const child of node.children ?? []) elements(child, out)
+  return out
+}
+
+function findByText(tree, text) {
+  return elements(tree).find((node) => node.type === 'button' && textsOf(node).join('').includes(text))
+}
+
+function byAttr(tree, name, value) {
+  return elements(tree).find((node) => node.props?.[name] === value)
+}
+
+const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// —— 浏览器与 React 的替身 ——
+const mini = createMiniReact()
+let definition
+globalThis.window = { __ModuleLoader__: { load: (def) => { definition = def } } }
+globalThis.document = { baseURI: 'http://127.0.0.1:62756/', visibilityState: 'visible' }
+
+const calls = []
+const cardBase = {
+  id: 'opencode-go',
+  label: 'OpenCode Go',
+  preset: 'opencode-go',
+  auth: 'key',
+  keysUrl: 'https://opencode.ai/auth',
+  windows: [
+    { key: 'rolling', used: 2, resetsAt: '2026-10-20T06:45:48.000Z' },
+    { key: 'weekly', used: 19, resetsAt: '2026-10-26T00:00:00.000Z' },
+    { key: 'monthly', used: 33, resetsAt: '2026-11-11T01:02:09.000Z' },
+  ],
+  worst: { key: 'monthly', used: 33 },
+  credential: { auth: 'key', configured: true, source: 'file', hint: 'OPENCODE_GO_API_KEY', writable: true },
+}
+const payload = {
+  enabled: true,
+  fetchedAt: '2026-10-20T05:50:00.000Z',
+  refreshMs: 60000,
+  providers: [
+    cardBase,
+    {
+      id: 'grok', label: 'Grok', preset: 'xai-billing', auth: 'oauth',
+      windows: [{ key: 'weekly', used: 100, resetsAt: '2026-10-20T06:32:13.017Z' }],
+      worst: { key: 'weekly', used: 100 },
+      parts: [{ name: 'GrokBuild', used: 92 }, { name: 'Cursor', used: 5 }],
+      credential: { auth: 'oauth', configured: false, hint: 'llm-pi-ai/xai' },
+    },
+    {
+      id: 'commandcode', label: 'Command Code', preset: 'commandcode', auth: 'key',
+      keysUrl: 'https://commandcode.ai/settings/keys',
+      plan: 'GOAT', until: '2026-10-22T11:40:10.000Z', renew: 'off',
+      windows: [
+        { key: 'five-hour', used: 50, resetsAt: '2026-10-20T15:00:00.000Z' },
+        { key: 'weekly', used: 25, resetsAt: '2026-10-24T14:46:00.767Z' },
+        { key: 'credits', used: 93, display: '$64.78 / $70.00' },
+      ],
+      worst: { key: 'credits', used: 93 },
+      credential: { auth: 'key', configured: true, source: 'cli', account: 'xuluoluo', hint: '.commandcode/auth.json', writable: false },
+    },
+  ],
+}
+
+let answer = (url, init) => {
+  if (url.endsWith('/quota/login/start')) {
+    return { status: 'pending', userCode: 'ABCD-1234', verificationUri: 'https://x.ai/device', verificationUriComplete: 'https://x.ai/device?code=ABCD-1234' }
+  }
+  if (url.includes('/quota/login/status')) return { status: 'pending' }
+  if (url.endsWith('/quota/key')) return { ok: true }
+  if (url.endsWith('/quota/clear')) return { ok: true }
+  return payload
+}
+
+globalThis.fetch = async (url, init) => {
+  const target = String(url)
+  calls.push({ url: target, method: init?.method ?? 'GET', body: init?.body })
+  return { ok: true, status: 200, json: async () => answer(target, init) }
+}
+
+// —— 加载 bundle ——
+await import(pathToFileURL(path.join(here, '..', 'build', 'client.js')).href)
+check('bundle 通过 __ModuleLoader__ 注册', definition?.id === '@local/dsh-quota')
+
+const mod = definition.factory((name) => {
+  if (name === 'react') return mini.React
+  throw new Error(`unexpected require: ${name}`)
+})
+check('导出 apply 与 inject', typeof mod.apply === 'function' && Array.isArray(mod.inject))
+check('inject 声明 slots 与 locale', mod.inject.join() === 'slots,locale')
+
+// —— 假 ctx ——
+const dicts = {}
+const slots = []
+const ctx = {
+  effect: (fn) => fn(),
+  locale: {
+    register: (ns, value) => { dicts[ns] = value },
+    bind: (ns) => (key) => dicts[ns]?.zh?.[key] ?? key,
+  },
+  slots: {
+    inject: (name, fn) => fn(),
+    register: (spec, component) => { slots.push({ spec, component }); return () => {} },
+  },
+}
+mod.apply(ctx)
+
+check('注册了两个 slot', slots.length === 2)
+check('chip 挂在 conversation.input.right（list 槽，不抢模型选择器）',
+  slots[0].spec.name === 'conversation.input.right' && slots[0].spec.id === 'quota-chip')
+check('设置页挂在 settings.section 且有 label', slots[1].spec.name === 'settings.section' && typeof slots[1].spec.label === 'function')
+check('中英字典都注册了', Boolean(dicts['settings.quota']?.zh?.title && dicts['settings.quota']?.en?.title))
+
+// —— chip ——
+check('首帧（还没取到数）不渲染', mini.mount(slots[0].component) === null)
+await tick()
+check('取数打了 /quota/state', calls.some((call) => call.url.endsWith('/quota/state')), JSON.stringify(calls))
+let chipTexts = textsOf(mini.tree)
+check('chip 渲染出三个 provider',
+  chipTexts.includes('OpenCode Go') && chipTexts.includes('Grok') && chipTexts.includes('Command Code'),
+  JSON.stringify(chipTexts))
+check('chip 显示最坏窗口的百分比', chipTexts.includes('33%') && chipTexts.includes('100%') && chipTexts.includes('93%'),
+  JSON.stringify(chipTexts))
+
+const chip = byAttr(mini.tree, 'data-dsh-quota', 'chip')
+check('chip 可点击', Boolean(chip && typeof chip.props.onClick === 'function'))
+await chip.props.onClick()
+await tick()
+check('点击打了 /quota/refresh 且是 POST',
+  calls.some((call) => call.url.endsWith('/quota/refresh') && call.method === 'POST'), JSON.stringify(calls.slice(-3)))
+
+// —— 设置页：数字 ——
+mini.mount(slots[1].component)
+await tick()
+let pageTexts = textsOf(mini.tree)
+check('页面标题与刷新按钮', pageTexts.includes('额度') && pageTexts.includes('刷新'))
+check('三个窗口名都本地化了',
+  pageTexts.includes('滚动窗口') && pageTexts.includes('每周') && pageTexts.includes('每月'),
+  JSON.stringify(pageTexts.slice(0, 30)))
+check('Command Code 的 5 小时与当月额度也认得',
+  pageTexts.includes('5 小时') && pageTexts.includes('当月额度'))
+check('套餐与到期写在卡头', pageTexts.join('').includes('套餐 · GOAT') && pageTexts.join('').includes('到期于'))
+check('credits 窗口显示金额而不是百分比', pageTexts.includes('$64.78 / $70.00'))
+check('Grok 的产品分项有渲染', pageTexts.includes('GrokBuild 92%'))
+
+// —— 设置页：凭据状态与动作 ——
+check('已存储的 key 说了来源', pageTexts.join('').includes('已存入 DSH 凭据库'))
+check('CLI 登录说了账号', pageTexts.join('').includes('使用 Command Code CLI 的登录') && pageTexts.join('').includes('xuluoluo'))
+check('未登录的 Grok 显示登录按钮', Boolean(findByText(mini.tree, '登录 Grok')))
+check('凭据引用名可见', pageTexts.includes('OPENCODE_GO_API_KEY'))
+
+// 存 key：先输入，再点保存
+const input = elements(mini.tree).find((node) => node.type === 'input')
+check('OpenCode 卡有 key 输入框', Boolean(input && typeof input.props.onChange === 'function'))
+input.props.onChange({ target: { value: '  sk-test-123  ' } })
+await tick()
+const save = findByText(mini.tree, '保存')
+check('输入后保存按钮可用', Boolean(save && save.props.disabled === false), JSON.stringify(save?.props?.disabled))
+await save.props.onClick()
+await tick(60)
+const keyCall = calls.find((call) => call.url.endsWith('/quota/key'))
+check('保存打了 /quota/key', Boolean(keyCall), JSON.stringify(calls.map((c) => c.url)))
+check('保存把 key 原样（不带空白）发给 Host', keyCall && JSON.parse(keyCall.body).key === 'sk-test-123', keyCall?.body)
+check('保存带上 provider id', keyCall && JSON.parse(keyCall.body).id === 'opencode-go')
+
+// 登录：点按钮 → 出设备码面板
+const signIn = findByText(mini.tree, '登录 Grok')
+await signIn.props.onClick()
+await tick(60)
+pageTexts = textsOf(mini.tree)
+check('登录打了 /quota/login/start', calls.some((call) => call.url.endsWith('/quota/login/start') && call.method === 'POST'))
+check('设备码面板显示 user code', pageTexts.includes('ABCD-1234'), JSON.stringify(pageTexts.slice(-16)))
+check('设备码面板给出授权页链接', Boolean(elements(mini.tree).find((node) => node.type === 'a' && String(node.props.href).includes('code=ABCD-1234'))))
+check('登录面板可取消', Boolean(findByText(mini.tree, '取消')))
+
+// 退出登录：对 oauth 卡是删记录
+const signOut = findByText(mini.tree, '退出登录')
+check('已登录的卡才有退出登录', signOut === undefined)
+
+// —— 失败态：接口挂掉时 chip 显示 ! 而不是消失 ——
+answer = () => ({ ...payload, providers: [{ id: 'grok', label: 'Grok', auth: 'oauth', error: 'HTTP 401: Unauthorized', credential: { auth: 'oauth', configured: true } }] })
+mini.mount(slots[0].component)
+await tick()
+const failChip = byAttr(mini.tree, 'data-dsh-quota', 'chip')
+await failChip.props.onClick()
+await tick(40)
+const failTexts = textsOf(mini.tree)
+check('出错时仍显示 provider 且标 !', failTexts.includes('Grok') && failTexts.includes('!'), JSON.stringify(failTexts))
+
+console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILED`)
+process.exit(failures === 0 ? 0 : 1)

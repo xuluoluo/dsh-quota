@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-quota
+      name: '@local/dsh-quota'

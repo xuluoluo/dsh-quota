@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Quota",
+    "description": "Shows the remaining allowance of OpenCode Go, Grok and Command Code, stores their API keys, and runs Grok's sign-in."
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@local/dsh-quota",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shows the remaining allowance of OpenCode Go, Grok and Command Code in DSH, stores their API keys, and runs Grok's sign-in.",
+  "exports": {
+    ".": "./build/index.js",
+    "./client": "./build/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "build/index.js",
+    "build/client.js",
+    "build/providers.js",
+    "build/xai-oauth.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}
