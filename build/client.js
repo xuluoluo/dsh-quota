@@ -106,6 +106,7 @@ window.__ModuleLoader__.load({
       addKeyEnv: '凭据引用（可选，如 MY_KEY）',
       addSubmit: '添加',
       adding: '添加中…',
+      providersUnit: '个供应商',
       added: '已添加',
       remove: '移除',
       removeFailed: '移除失败',
@@ -190,6 +191,7 @@ window.__ModuleLoader__.load({
       addKeyEnv: 'Credential reference (optional, e.g. MY_KEY)',
       addSubmit: 'Add',
       adding: 'Adding…',
+      providersUnit: 'providers',
       added: 'Added',
       remove: 'Remove',
       removeFailed: 'Removing failed',
@@ -774,6 +776,8 @@ window.__ModuleLoader__.load({
         })
           .then(function () {
             draftState[1]({ id: '', label: '', baseURL: '', apiKeyEnv: '' })
+            errorState[1]('')
+            if (props.onClose) props.onClose()
             props.onChanged()
           })
           .catch(function (failure) {
@@ -831,7 +835,12 @@ window.__ModuleLoader__.load({
           style: Object.assign({}, buttonPrimary, busy ? disabledStyle : {}),
           disabled: busy,
           onClick: submit,
-        }, busy ? t('adding') : t('addSubmit'))),
+        }, busy ? t('adding') : t('addSubmit')),
+        h('button', {
+          type: 'button',
+          style: buttonQuiet,
+          onClick: function () { if (props.onClose) props.onClose() },
+        }, t('cancel'))),
       error ? h('div', { style: { fontSize: '11px', color: C.error } }, error) : null)
     }
 
@@ -855,6 +864,9 @@ window.__ModuleLoader__.load({
       var loginsState = React.useState({})
       var logins = loginsState[0]
       var setLogins = loginsState[1]
+      var addingState = React.useState(false)
+      var adding = addingState[0]
+      var setAdding = addingState[1]
 
       function setDraft(id, value) {
         var next = Object.assign({}, drafts)
@@ -965,6 +977,25 @@ window.__ModuleLoader__.load({
 
         h('p', { style: { margin: 0, fontSize: '12px', lineHeight: '19px', color: C.minor } }, t('intro')),
 
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+          h('button', {
+            type: 'button',
+            style: Object.assign({}, buttonPrimary, adding ? { borderColor: C.borderStrong, color: C.minor } : {}),
+            onClick: function () { setAdding(!adding) },
+          }, adding ? t('cancel') : '+ ' + t('addTitle')),
+          h('span', { style: { flex: '1' } }),
+          h('span', { style: { fontSize: '11px', color: C.minor } },
+            cards.length + ' ' + t('providersUnit'))),
+
+        adding
+          ? h(AddProvider, {
+            t: t,
+            presets: data && data.presets,
+            onChanged: function () { void store.refresh() },
+            onClose: function () { setAdding(false) },
+          })
+          : null,
+
         h(UsageSection, { t: t, usage: data && data.usage }),
 
         state.error
@@ -998,13 +1029,7 @@ window.__ModuleLoader__.load({
               login: logins[card.id] || card.login,
               notice: notices[card.id],
             })
-          })),
-
-        h(AddProvider, {
-          t: t,
-          presets: data && data.presets,
-          onChanged: function () { void store.refresh() },
-        }))
+          })))
     }
 
     // —— 注册 ——

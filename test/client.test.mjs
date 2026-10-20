@@ -318,9 +318,15 @@ check('保存打了 /quota/key', Boolean(keyCall), JSON.stringify(calls.map((c) 
 check('保存把 key 原样（不带空白）发给 Host', keyCall && JSON.parse(keyCall.body).key === 'sk-test-123', keyCall?.body)
 check('保存带上 provider id', keyCall && JSON.parse(keyCall.body).id === 'opencode-go')
 
-// —— 添加供应商 ——
+// —— 添加供应商：列表上方一个按钮，点开才出表单 ——
+const addToggle = elements(mini.tree).find((node) => node.type === 'button' && textsOf(node).join('').includes('添加供应商'))
+check('列表上方有「添加供应商」按钮', Boolean(addToggle), JSON.stringify(elements(mini.tree).filter((n) => n.type === 'button').map((n) => textsOf(n).join(''))))
+check('没点开时看不到表单',
+  !elements(mini.tree).some((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id')))
+addToggle.props.onClick()
+await tick()
 const idField = elements(mini.tree).find((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id'))
-check('页面底部有添加供应商的表单', Boolean(idField) && pageTexts.includes('添加供应商'))
+check('点开后出现表单', Boolean(idField))
 idField.props.onChange({ target: { value: 'my-oc' } })
 await tick()
 const addButton = elements(mini.tree).find((node) => node.type === 'button' && textsOf(node).join('') === '添加')
@@ -330,6 +336,8 @@ await tick(80)
 const addCall = calls.find((call) => call.url.endsWith('/quota/providers'))
 check('添加打了 /quota/providers', Boolean(addCall), JSON.stringify(calls.map((call) => call.url)))
 check('添加带上预设与 id', addCall && JSON.parse(addCall.body).id === 'my-oc' && JSON.parse(addCall.body).preset === 'opencode-go', addCall?.body)
+check('添加成功后表单收起',
+  !elements(mini.tree).some((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id')))
 
 // 登录：点按钮 → 出设备码面板
 const signIn = findByText(mini.tree, '登录 Grok')
