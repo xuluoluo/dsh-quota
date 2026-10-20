@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-quota",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "Shows the remaining allowance of OpenCode Go, Grok and Command Code in DSH, adds providers, counts token usage, stores their API keys, and runs Grok's sign-in.",
+  "description": "Shows the remaining allowance of OpenCode Go, Grok and Command Code in DSH, adds providers, counts token usage, reads the DeepSeek API balance, stores their API keys, and runs Grok's sign-in.",
   "exports": {
     ".": "./build/index.js",
     "./client": "./build/client.js",

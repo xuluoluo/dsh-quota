@@ -49,6 +49,7 @@ const DEFAULT_TARGETS = Object.freeze([
   { id: 'opencode-go', preset: 'opencode-go', apiKeyEnv: 'OPENCODE_GO_API_KEY' },
   { id: 'grok', preset: 'xai-billing', record: XAI_RECORD },
   { id: 'commandcode', preset: 'commandcode', apiKeyEnv: 'COMMANDCODE_API_KEY' },
+  { id: 'deepseek', preset: 'deepseek-api', apiKeyEnv: 'DEEPSEEK_API_KEY' },
 ])
 
 const DEFAULT_REFRESH_MS = 60_000
@@ -383,6 +384,7 @@ function createService(ctx, settings, signIn, usage) {
         until: reading.until,
         renew: reading.renew,
         balance: reading.balance,
+        note: reading.note,
         parts: reading.parts,
       }
     } catch (error) {

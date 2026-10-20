@@ -48,6 +48,13 @@ export const PRESETS = Object.freeze({
     /** The Command Code CLI's own sign-in, read when no key is stored. */
     cliAuth: '.commandcode/auth.json',
   },
+  'deepseek-api': {
+    label: 'DeepSeek API',
+    auth: 'key',
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    keysUrl: 'https://platform.deepseek.com/api_keys',
+    baseURL: 'https://api.deepseek.com',
+  },
 })
 
 const trimSlash = (value) => String(value ?? '').replace(/\/+$/, '')
@@ -304,12 +311,67 @@ async function commandCodeQuota(target, preset, io) {
   }
 }
 
+// ---- DeepSeek's own API ---------------------------------------------------------
+
+/** The currency signs the platform reports balances in. */
+const CURRENCY = { CNY: '¥', USD: '$', HKD: 'HK$', EUR: '€' }
+
+function currencyOf(code) {
+  const key = String(code ?? '').toUpperCase()
+  return CURRENCY[key] ?? (key === '' ? '' : `${key} `)
+}
+
+/**
+ * `GET /user/balance`, as the official API answers it:
+ * `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}`
+ *
+ * A balance is money, not a window: there is no denominator the vendor exposes,
+ * so this makes no progress bar — the card shows the amount and what it is made
+ * of. `is_available` is the vendor saying whether the key can still pay.
+ */
+export function readDeepSeekBalance(body) {
+  const infos = (Array.isArray(body?.balance_infos) ? body.balance_infos : []).filter(isObject)
+  const info = infos[0]
+  if (!info) throw new Error('the reply holds no balance')
+  const symbol = currencyOf(info.currency)
+  const total = asNumber(info.total_balance)
+  if (total === undefined) throw new Error('the reply holds no total balance')
+
+  const parts = []
+  const topped = asNumber(info.topped_up_balance)
+  const granted = asNumber(info.granted_balance)
+  if (topped !== undefined) parts.push(`topped up ${symbol}${topped.toFixed(2)}`)
+  if (granted !== undefined && granted > 0) parts.push(`granted ${symbol}${granted.toFixed(2)}`)
+  if (infos.length > 1) parts.push(`+${infos.length - 1} more currency`)
+
+  const available = body?.is_available !== false
+  const bits = available ? [] : ['cannot pay right now']
+  bits.push(...parts)
+  return {
+    windows: [],
+    balance: `${symbol}${total.toFixed(2)}`,
+    available,
+    note: bits.join(' · '),
+  }
+}
+
+async function deepSeekQuota(target, preset, io) {
+  const url = `${target.baseURL}/user/balance`
+  const body = await io.fetchJson(url, {
+    headers: { authorization: `Bearer ${target.token}` },
+    signal: io.signal,
+    timeoutMs: io.timeoutMs,
+  })
+  return { url, ...readDeepSeekBalance(body) }
+}
+
 // ---- the reader the Host calls ------------------------------------------------
 
 const READERS = {
   'opencode-go': openCodeQuota,
   'xai-billing': xaiQuota,
   commandcode: commandCodeQuota,
+  'deepseek-api': deepSeekQuota,
 }
 
 /**

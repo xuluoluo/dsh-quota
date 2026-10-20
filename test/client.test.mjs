@@ -169,6 +169,7 @@ const payload = {
     { id: 'opencode-go', label: 'OpenCode Go', auth: 'key' },
     { id: 'xai-billing', label: 'Grok', auth: 'oauth' },
     { id: 'commandcode', label: 'Command Code', auth: 'key' },
+    { id: 'deepseek-api', label: 'DeepSeek API', auth: 'key' },
   ],
   providers: [
     cardBase,
@@ -190,6 +191,13 @@ const payload = {
       ],
       worst: { key: 'credits', used: 93 },
       credential: { auth: 'key', configured: true, source: 'cli', account: 'xuluoluo', hint: '.commandcode/auth.json', writable: false },
+    },
+    {
+      id: 'deepseek', label: 'DeepSeek API', preset: 'deepseek-api', auth: 'key',
+      keysUrl: 'https://platform.deepseek.com/api_keys',
+      windows: [], worst: null,
+      balance: '¥110.00', note: 'topped up ¥100.00 · granted ¥10.00',
+      credential: { auth: 'key', configured: true, source: 'file', hint: 'DEEPSEEK_API_KEY', writable: true },
     },
   ],
 }
@@ -250,11 +258,12 @@ check('首帧（还没取到数）不渲染', mini.mount(slots[0].component) ===
 await tick()
 check('取数打了 /quota/state', calls.some((call) => call.url.endsWith('/quota/state')), JSON.stringify(calls))
 let chipTexts = textsOf(mini.tree)
-check('chip 渲染出三个 provider',
-  chipTexts.includes('OpenCode Go') && chipTexts.includes('Grok') && chipTexts.includes('Command Code'),
+check('chip 渲染出四个 provider',
+  chipTexts.includes('OpenCode Go') && chipTexts.includes('Grok') && chipTexts.includes('Command Code') && chipTexts.includes('DeepSeek API'),
   JSON.stringify(chipTexts))
 check('chip 显示最坏窗口的百分比', chipTexts.includes('33%') && chipTexts.includes('100%') && chipTexts.includes('93%'),
   JSON.stringify(chipTexts))
+check('没有窗口的余额卡在 chip 上显示金额', chipTexts.includes('¥110.00'), JSON.stringify(chipTexts))
 
 const chip = byAttr(mini.tree, 'data-dsh-quota', 'chip')
 check('chip 可点击', Boolean(chip && typeof chip.props.onClick === 'function'))
@@ -275,6 +284,7 @@ check('Command Code 的 5 小时与当月额度也认得',
   pageTexts.includes('5 小时') && pageTexts.includes('当月额度'))
 check('套餐与到期写在卡头', pageTexts.join('').includes('套餐 · GOAT') && pageTexts.join('').includes('到期于'))
 check('credits 窗口显示金额而不是百分比', pageTexts.includes('$64.78 / $70.00'))
+check('DeepSeek 余额卡：金额 + 构成', pageTexts.join('').includes('余额 · ¥110.00') && pageTexts.join('').includes('topped up ¥100.00'))
 check('Grok 的产品分项有渲染', pageTexts.includes('GrokBuild 92%'))
 
 // —— 用量 ——
@@ -286,7 +296,7 @@ check('用量：按模型分行', pageTexts.includes('deepseek-v4.1-flash') && p
 check('用量：七天条带七根柱子',
   elements(mini.tree).filter((node) => /^\d{4}-\d{2}-\d{2} · /.test(String(node.props?.title ?? ''))).length === 7)
 check('每个 provider 都有移除按钮',
-  elements(mini.tree).filter((node) => node.type === 'button' && textsOf(node).join('') === '移除').length === 3)
+  elements(mini.tree).filter((node) => node.type === 'button' && textsOf(node).join('') === '移除').length === 4)
 
 // —— 设置页：凭据状态与动作 ——
 check('已存储的 key 说了来源', pageTexts.join('').includes('已存入 DSH 凭据库'))

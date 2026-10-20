@@ -21,12 +21,17 @@ DSH 的模型选择器只告诉你「用哪个模型」，不告诉你「这个 
 | OpenCode Go | `GET https://opencode.ai/zen/go/v1/usage` | `usage.rolling / weekly / monthly` 的 `percent` 与 `resetsAt` |
 | Grok（SuperGrok / X Premium） | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` | `config.creditUsagePercent`、`currentPeriod`、`productUsage`（GrokBuild / Cursor / GrokBot 分项）、`prepaidBalance`、有 cap 时的 `onDemand*` |
 | Command Code | `GET https://api.commandcode.ai/alpha/billing/credits`<br>`GET https://api.commandcode.ai/alpha/billing/subscriptions` | `windowLimits.fiveHour / weekly` 的 `used/cap/resetAt`；`credits.monthlyCredits + purchasedCredits + freeCredits` 当月余额；订阅给出套餐名（Go / Pro / GOAT / Max / Ultra）、到期与是否续费 |
+| DeepSeek 官方 API | `GET https://api.deepseek.com/user/balance` | `is_available`，以及 `balance_infos[0]` 的 `total_balance / granted_balance / topped_up_balance`（按币种取符号：CNY `¥`、USD `$`） |
 
 Command Code 的 `billing/credits` 不告诉你套餐，而当月额度的分母是套餐给的（GOAT = $70/月），
 所以第二支接口**并行**只读一次、缓存 10 分钟（magpie 也是这么做的；它有时要 15–20 秒，
 排在后面会把整张卡拖慢）。读不到就退回「只显示余额」。
 
 卡里的窗口**按已用比例从大到小排**：第一行就是最可能挡住你下一次请求的那个限制。
+
+DeepSeek 的卡是**余额**，不是窗口：官方只给金额、不给分母，所以它不画进度条，只报
+`余额 · ¥110.00` 和构成（充值 / 赠金），`is_available: false` 时在金额前写明「can not pay」。
+它用的是 `DEEPSEEK_API_KEY`；DSH 账号本身的余额仍然看「账号与余额」页 —— 两套账单不是一回事。
 
 这几个端点在这台机器上真实跑通过，不是照文档猜的形状 —— `test/live-probe.mjs` 可随时复看。
 
@@ -87,7 +92,7 @@ Command Code 没存 key 时自动读它 CLI 的登录 `~/.commandcode/auth.json`
 不是插件内部的状态文件 —— 所以重启、升级都还在，也能被别的工具读到。第一次添加会把
 三个内置目标显式写下来（否则「写了 providers 就是整份替换」会把它们弄丢）。
 
-现在有三种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`。
+现在有四种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、`deepseek-api`（只有余额）。
 同一个预设可以加多次 —— 换网关、换 key、换账号都行。
 
 ## 五、安装
@@ -120,6 +125,9 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       - id: commandcode
         preset: commandcode
         apiKeyEnv: COMMANDCODE_API_KEY
+      - id: deepseek
+        preset: deepseek-api
+        apiKeyEnv: DEEPSEEK_API_KEY
       - id: my-oc                  # 换网关：baseURL 替换预设的默认根路径
         preset: opencode-go
         baseURL: https://opencode.ai/inference/go
@@ -157,10 +165,10 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 ```powershell
 cd plugins\dsh-quota
 
-node test\providers.test.mjs                  # 三个 reader 的纯逻辑（34 项）
+node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 项）
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
-node test\host.test.mjs                       # Host：路由、凭据、续期、设备码登录、加/减供应商、用量、同源（62 项）
-node test\client.test.mjs                     # Client：注册、取数、渲染、用量区、存 key、登录面板、加供应商（40 项）
+node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（68 项）
+node test\client.test.mjs                     # Client：注册、取数、渲染、用量、存 key、登录、加供应商（46 项）
 
 node tools\grok-login.test.mjs                # 工作区里的 grok-login 回归（不在这个仓库）
 ```
@@ -197,7 +205,7 @@ package.json          dsh.bundle.patch + dsh.client + exports/files
 cordis.patch.yml      insert: dsh-quota
 icon.svg              自绘的仪表盘图标
 locale/{en,zh}.json   meta.title / meta.description
-build/providers.js    三个 reader + fetch（纯函数）
+build/providers.js    四个 reader + fetch（纯函数）
 build/usage.js        用量折叠 / 汇总 / 落盘（纯函数 + 一个小 store）
 build/xai-oauth.js    设备码 / 续期 / grant 形状（fetch 注入）
 build/index.js        Host：配置、快照、路由、登录、供应商、用量接线

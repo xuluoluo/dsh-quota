@@ -432,7 +432,7 @@ window.__ModuleLoader__.load({
             return windowLabel(t, win.key) + ' ' + percentOf(win.used) + '%' +
               (win.resetsAt ? ' · ' + t('resetsIn') + relativeReset(win.resetsAt, t) : '')
           }).join('\n')
-        var value = card.error ? '!' : worst ? percentOf(worst.used) + '%' : t('never')
+        var value = card.error ? '!' : worst ? percentOf(worst.used) + '%' : (card.balance || t('never'))
         return h('span', {
           key: card.id,
           title: card.label + (detail ? '\n' + detail : ''),
@@ -595,6 +595,10 @@ window.__ModuleLoader__.load({
 
       card.balance
         ? h('div', { style: { fontSize: '12px', color: C.text } }, t('balance') + ' · ' + card.balance)
+        : null,
+
+      card.note
+        ? h('div', { style: { fontSize: '11px', color: C.minor } }, card.note)
         : null,
 
       card.error

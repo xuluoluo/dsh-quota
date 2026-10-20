@@ -9,6 +9,7 @@ import path from 'node:path'
 import {
   commandCodeCreditsWindow,
   commandCodePlan,
+  readDeepSeekBalance,
   readCommandCodeCredits,
   readCommandCodeSubscription,
   readOpenCodeUsage,
@@ -108,6 +109,40 @@ check('worstOf 忽略没有数字的窗口', worstOf([{ used: 3 }, {}]).used ===
     check('订阅接口挂了仍然给出窗口', reading.windows.length === 1 && Math.round(reading.windows[0].used) === 10, JSON.stringify(reading))
     check('没有套餐时退回余额而不是编一个月度窗口', reading.plan === undefined && reading.balance === '$5.00', JSON.stringify(reading))
     check('两个接口是一起问的', asked.length === 2, JSON.stringify(asked))
+  } finally {
+    globalThis.fetch = realFetch
+  }
+}
+
+// —— DeepSeek 官方 API：只有余额，没有窗口 ——
+const ds = readDeepSeekBalance({
+  is_available: true,
+  balance_infos: [{ currency: 'CNY', total_balance: '110.00', granted_balance: '10.00', topped_up_balance: '100.00' }],
+})
+check('DeepSeek：余额读成 ¥110.00', ds.balance === '¥110.00', JSON.stringify(ds))
+check('DeepSeek：金额不是百分比，所以没有窗口', ds.windows.length === 0)
+check('DeepSeek：充值与赠金写进 note', /topped up ¥100\.00/.test(ds.note) && /granted ¥10\.00/.test(ds.note), ds.note)
+check('DeepSeek：美元用 $', readDeepSeekBalance({ balance_infos: [{ currency: 'USD', total_balance: '3.5' }] }).balance === '$3.50')
+check('DeepSeek：不可支付时说出来', readDeepSeekBalance({ is_available: false, balance_infos: [{ currency: 'CNY', total_balance: '0.00' }] }).note.startsWith('cannot pay right now'))
+check('DeepSeek：赠金为 0 时不占一行', !/granted/.test(readDeepSeekBalance({ balance_infos: [{ currency: 'CNY', total_balance: '1.00', granted_balance: '0.00' }] }).note))
+let threwDeepSeek = false
+try { readDeepSeekBalance({}) } catch { threwDeepSeek = true }
+check('DeepSeek：没有余额就抛错而不是编一个', threwDeepSeek)
+
+{
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    if (!String(url).endsWith('/user/balance')) throw new Error(`unexpected ${url}`)
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '12.34' }] }),
+    }
+  }
+  try {
+    const reading = await readQuota({ id: 'deepseek', preset: 'deepseek-api', token: 'k' }, { timeoutMs: 5000 })
+    check('DeepSeek：readQuota 打 /user/balance 并给出余额',
+      reading.balance === '¥12.34' && reading.url.endsWith('/user/balance'), JSON.stringify(reading))
   } finally {
     globalThis.fetch = realFetch
   }
