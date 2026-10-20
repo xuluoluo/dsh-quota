@@ -171,7 +171,7 @@ $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（�
 node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（68 项）
 node test\client.test.mjs                     # Client：注册、取数、渲染、用量、存 key、登录、加供应商（46 项）
 
-node tools\grok-login.test.mjs                # 工作区里的 grok-login 回归（不在这个仓库）
+node tools\grok-login.test.mjs                # grok-login 的 YAML 写入回归（读本机凭据文件）
 ```
 
 装好之后真进程上也能直接看：
@@ -212,4 +212,12 @@ build/xai-oauth.js    设备码 / 续期 / grant 形状（fetch 注入）
 build/index.js        Host：配置、快照、路由、登录、供应商、用量接线
 build/client.js       Client：chip + 设置页（纯 JS，无构建步骤）
 test/*.mjs            上面那三组测试 + live-probe
+tools/*.mjs           与本机凭据打交道的命令行工具（不进 npm 包，见 package.json 的 files）
+  grok-login.mjs        走设备码登录并把 grant 写进 ~/.dsh/.credentials.yaml
+  grok-verify.mjs       验证那条凭据能不能直接当 xAI API 凭据用
+  grok-login.test.mjs   grok-login 的 YAML 写入回归
+  asar.mjs              从 DSH 的 app.asar 里 list / cat / extract 包源码
 ```
+
+`tools/` 里的脚本要读 YAML，用的是仓库外 `_ref/yaml` 的本地副本；那份第三方代码不进仓库，
+缺席时脚本会明确报错退出。
