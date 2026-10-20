@@ -234,7 +234,7 @@ check('空 key 被拒绝', (await call(ROUTES.key, { method: 'POST', body: { id:
 check('未知 provider 回 404', (await call(ROUTES.key, { method: 'POST', body: { id: 'nope', key: 'k' } })).status === 404)
 
 // —— 同源与方式 ——
-check('没有 Origin 的 POST 被拒', (await call(ROUTES.key, { method: 'POST', body: { id: 'opencode-go', key: 'k' }, origin: '' })).status === 403)
+check('没有 Origin 的 POST 直接放过（桌面渲染进程就不带 Origin）', (await call(ROUTES.key, { method: 'POST', body: { id: 'opencode-go', key: 'k' }, origin: '' })).status === 200)
 check('别的 Origin 的 POST 被拒', (await call(ROUTES.key, { method: 'POST', body: { id: 'opencode-go', key: 'k' }, origin: 'http://evil.example' })).status === 403)
 check('GET /quota/key 回 405', (await call(ROUTES.key)).status === 405)
 check('POST /quota/state 回 405', (await call(ROUTES.state, { method: 'POST' })).status === 405)

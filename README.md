@@ -149,10 +149,11 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 | GET | `/quota/login/status?id=` | `pending` / `success` / `failed` / `cancelled` |
 | POST | `/quota/login/cancel` | 取消一次登录 |
 
-**同源规则**：写操作必须是本机页面发来的 —— `Origin` 落在 loopback（`127.0.0.1` / `localhost` /
-`[::1]`，任意端口）、或浏览器标了 `Sec-Fetch-Site: same-origin|none`、或 `Host` 与 `Origin` 一致。
-别的站点的页面发来的请求回 403，并把 `origin / host / site` 原样写在响应里，页面会显示出来
-（上一版的「forbidden-origin」就是只比了 `Host`，Electron 用 `localhost` 打开时被自己挡掉）。
+**同源规则**：只拦「别的站点的页面」。桌面渲染进程向自己的 Host 发请求时**既不带 `Origin` 也不带
+`Sec-Fetch-Site`**，所以没有 `Origin` 就当作本机客户端放行；带了 `Origin` 的，只有 loopback
+（`127.0.0.1` / `localhost` / `[::1]`，任意端口）、`Sec-Fetch-Site: same-origin|none`、或与 `Host`
+一致才放行，其余回 403 并把 `origin / host / site` 写进响应 —— 页面直接显示，这类问题下次能自己
+说出原因（上一版就是被“写操作必须有 Origin”挡掉了自己的「保存」「移除」）。
 
 **安全边界（别忽略）**：这些路由由 Host 的 `webServer` 直接注册，**不经过 DSH 页面那层 token 校验**
 （`GET /` 要 token，`GET /quota/state` 不要）。它们只回额度数字、套餐名、token 计数和

@@ -476,14 +476,18 @@ function isLocalOrigin(value) {
 }
 
 /**
- * A request from the page, and not from some other site's page. The desktop
- * shell may address the same Host as `localhost` or `127.0.0.1` and a renderer
- * may report `same-origin` without naming the origin, so those count; a page on
- * another site is none of them.
+ * A request from the page, and not from some other site's page.
+ *
+ * The desktop renderer sends neither `Origin` nor `Sec-Fetch-Site` on its own
+ * fetches, so a missing origin is what a local client looks like; only a
+ * browser names an origin, and it always does so on a cross-site POST — the
+ * case this check exists to refuse. A named origin counts when it is loopback
+ * (the page may be opened as localhost or 127.0.0.1 on any port), when the
+ * browser marks the request same-origin, or when it matches the Host header.
  */
-function sameOrigin(req, required) {
+function sameOrigin(req) {
   const origin = req.headers.origin
-  if (!origin) return !required
+  if (!origin) return true
   if (isLocalOrigin(origin)) return true
   const site = req.headers['sec-fetch-site']
   if (site === 'same-origin' || site === 'none') return true
@@ -554,19 +558,19 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.state, async (req, res) => {
     if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, false)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     sendJson(res, 200, await service.state())
   })
 
   route(ROUTES.refresh, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     sendJson(res, 200, await service.state({ force: true }))
   })
 
   route(ROUTES.key, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     const body = await readJson(req)
     const target = targetOf(service, body.id)
     if (!target) return jsonError(res, 404, 'unknown-provider')
@@ -588,7 +592,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.clear, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     const body = await readJson(req)
     const target = targetOf(service, body.id)
     if (!target) return jsonError(res, 404, 'unknown-provider')
@@ -612,7 +616,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.providers, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     const body = await readJson(req)
     if (!PRESETS[body.preset]) return jsonError(res, 400, `unknown preset "${String(body.preset)}"`)
     const id = typeof body.id === 'string' ? body.id.trim() : ''
@@ -633,7 +637,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.providersRemove, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     const body = await readJson(req)
     const id = typeof body.id === 'string' ? body.id.trim() : ''
     const targets = service.targets()
@@ -649,7 +653,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.loginStart, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     const body = await readJson(req)
     const target = targetOf(service, body.id)
     if (!target) return jsonError(res, 404, 'unknown-provider')
@@ -663,7 +667,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.loginStatus, async (req, res) => {
     if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, false)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
     const id = url.searchParams.get('id') ?? ''
     sendJson(res, 200, signIn.publicOf(id) ?? { status: 'idle' })
@@ -671,7 +675,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.loginCancel, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return forbidden(res, req)
+    if (!sameOrigin(req)) return forbidden(res, req)
     const body = await readJson(req)
     sendJson(res, 200, { ok: signIn.cancel(typeof body.id === 'string' ? body.id : '') })
   })
