@@ -761,7 +761,12 @@ export function apply(ctx, config) {
   const usage = createUsageStore()
   void usage.ready()
   ctx.effect(() => () => { void usage.flush() })
-  ctx.effect(() => ctx.on('llm/stream', (options, next) => watchStream(usage, options, next)))
+  try {
+    ctx.effect(() => ctx.on('llm/stream', (options, next) => watchStream(usage, options, next)))
+  } catch (error) {
+    // Counting tokens must never be the reason the page does not load.
+    log(ctx, 'warn', '[quota] usage cannot observe model calls: %s', String(error?.message ?? error))
+  }
 
   const service = createService(ctx, settings, signIn, usage)
   registerRoutes(ctx, service, settings, signIn)
