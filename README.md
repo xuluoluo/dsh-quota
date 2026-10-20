@@ -22,6 +22,7 @@ DSH 的模型选择器只告诉你「用哪个模型」，不告诉你「这个 
 | Grok（SuperGrok / X Premium） | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` | `config.creditUsagePercent`、`currentPeriod`、`productUsage`（GrokBuild / Cursor / GrokBot 分项）、`prepaidBalance`、有 cap 时的 `onDemand*` |
 | Command Code | `GET https://api.commandcode.ai/alpha/billing/credits`<br>`GET https://api.commandcode.ai/alpha/billing/subscriptions` | `windowLimits.fiveHour / weekly` 的 `used/cap/resetAt`；`credits.monthlyCredits + purchasedCredits + freeCredits` 当月余额；订阅给出套餐名（Go / Pro / GOAT / Max / Ultra）、到期与是否续费 |
 | DeepSeek 官方 API | `GET https://api.deepseek.com/user/balance` | `is_available`，以及 `balance_infos[0]` 的 `total_balance / granted_balance / topped_up_balance`（按币种取符号：CNY `¥`、USD `$`） |
+| 阿里云百炼 | —— | 没有公开的余额 / 用量接口（账单在阿里云 Billing API，要 AccessKey，不是 DashScope key），所以这张卡**只存 key**，不编数字 |
 
 Command Code 的 `billing/credits` 不告诉你套餐，而当月额度的分母是套餐给的（GOAT = $70/月），
 所以第二支接口**并行**只读一次、缓存 10 分钟（magpie 也是这么做的；它有时要 15–20 秒，
@@ -83,6 +84,13 @@ token 快过期（< 5 分钟）时读额度会先用 refresh_token 续一次并�
 Command Code 没存 key 时自动读它 CLI 的登录 `~/.commandcode/auth.json`（`apiKey` + `userName`），
 卡片显示「使用 Command Code CLI 的登录 · 用户名」。这条只读，所以没有「清除」。
 
+### 阿里云百炼：只有 key
+
+百炼的 DashScope key 是 OpenAI 兼容的（`https://dashscope.aliyuncs.com/compatible-mode/v1`），
+但这版 pi-ai 的 provider 目录里没有百炼，所以这张卡只负责把 key 存成 `DASHSCOPE_API_KEY`。
+要让 DSH 真能用上 qwen：去「设置 → 模型 → 添加供应商」新增一条，Base URL 填上面那个地址、
+凭据引用填 `DASHSCOPE_API_KEY`；之后调用产生的 token 照样进上面的用量统计。
+
 ## 四、添加 / 移除供应商
 
 列表上方一个「+ 添加供应商」按钮：点开是预设 + `id` + 可选（显示名 / 网关地址 / 凭据引用）的表单，添加成功后自动收起。
@@ -92,7 +100,7 @@ Command Code 没存 key 时自动读它 CLI 的登录 `~/.commandcode/auth.json`
 不是插件内部的状态文件 —— 所以重启、升级都还在，也能被别的工具读到。第一次添加会把
 三个内置目标显式写下来（否则「写了 providers 就是整份替换」会把它们弄丢）。
 
-现在有四种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、`deepseek-api`（只有余额）。
+现在有五种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、`deepseek-api`（只有余额）、`bailian`（只存 key）。
 同一个预设可以加多次 —— 换网关、换 key、换账号都行。
 
 ## 五、安装
@@ -128,6 +136,9 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       - id: deepseek
         preset: deepseek-api
         apiKeyEnv: DEEPSEEK_API_KEY
+      - id: bailian
+        preset: bailian
+        apiKeyEnv: DASHSCOPE_API_KEY
       - id: my-oc                  # 换网关：baseURL 替换预设的默认根路径
         preset: opencode-go
         baseURL: https://opencode.ai/inference/go
@@ -168,8 +179,8 @@ cd plugins\dsh-quota
 
 node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 项）
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
-node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（68 项）
-node test\client.test.mjs                     # Client：注册、取数、渲染、用量、存 key、登录、加供应商（46 项）
+node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（71 项）
+node test\client.test.mjs                     # Client：注册、取数、渲染、用量、存 key、登录、加供应商（50 项）
 
 node tools\grok-login.test.mjs                # grok-login 的 YAML 写入回归（读本机凭据文件）
 ```

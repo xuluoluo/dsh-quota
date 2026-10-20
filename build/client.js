@@ -111,6 +111,7 @@ window.__ModuleLoader__.load({
       remove: '移除',
       removeFailed: '移除失败',
       needId: '先填 id',
+      noQuota: '这家没有公开的额度接口：这张卡只负责把 key 存进 DSH 凭据库，token 用量看上面的「用量」。',
     }
 
     var en = {
@@ -196,6 +197,7 @@ window.__ModuleLoader__.load({
       remove: 'Remove',
       removeFailed: 'Removing failed',
       needId: 'Enter an id first',
+      noQuota: 'No public allowance endpoint: this card only stores the key in the DSH credential store. Token usage is under Usage above.',
     }
 
     // —— 主题令牌：只用 DSH 自己公布的别名 ——
@@ -601,6 +603,10 @@ window.__ModuleLoader__.load({
 
       card.note
         ? h('div', { style: { fontSize: '11px', color: C.minor } }, card.note)
+        : null,
+
+      card.quota === false
+        ? h('div', { style: { fontSize: '11px', color: C.minor, lineHeight: '17px' } }, t('noQuota'))
         : null,
 
       card.error

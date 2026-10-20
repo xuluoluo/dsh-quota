@@ -50,6 +50,7 @@ const DEFAULT_TARGETS = Object.freeze([
   { id: 'grok', preset: 'xai-billing', record: XAI_RECORD },
   { id: 'commandcode', preset: 'commandcode', apiKeyEnv: 'COMMANDCODE_API_KEY' },
   { id: 'deepseek', preset: 'deepseek-api', apiKeyEnv: 'DEEPSEEK_API_KEY' },
+  { id: 'bailian', preset: 'bailian', apiKeyEnv: 'DASHSCOPE_API_KEY' },
 ])
 
 const DEFAULT_REFRESH_MS = 60_000
@@ -363,6 +364,12 @@ function createService(ctx, settings, signIn, usage) {
         missing: true,
         error: credential.error ?? `no credential for ${credential.hint ?? preset.label}`,
       }
+    }
+
+    // A provider whose key cannot be priced or metered from outside: the card
+    // exists to hold the credential, and says so instead of inventing numbers.
+    if (preset.quota === false) {
+      return { ...card, quota: false, windows: [], worst: null }
     }
 
     try {

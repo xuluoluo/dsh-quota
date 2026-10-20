@@ -55,6 +55,18 @@ export const PRESETS = Object.freeze({
     keysUrl: 'https://platform.deepseek.com/api_keys',
     baseURL: 'https://api.deepseek.com',
   },
+  bailian: {
+    label: 'Alibaba Bailian',
+    auth: 'key',
+    apiKeyEnv: 'DASHSCOPE_API_KEY',
+    keysUrl: 'https://bailian.console.aliyun.com/',
+    /**
+     * Bailian's DashScope key has no public balance or quota endpoint — the
+     * bill lives in Alibaba Cloud's Billing API, which wants an AccessKey, not
+     * this key — so this target only stores the key here.
+     */
+    quota: false,
+  },
 })
 
 const trimSlash = (value) => String(value ?? '').replace(/\/+$/, '')

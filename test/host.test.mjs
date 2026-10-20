@@ -187,7 +187,7 @@ records.set('llm-pi-ai/xai', { kind: 'grant', payload: { type: 'oauth', access: 
 
 let state = await call(ROUTES.state)
 check('GET /quota/state 回 200', state.status === 200)
-check('四张卡都在，顺序是配置顺序', (state.json.providers ?? []).map((c) => c.id).join() === 'opencode-go,grok,commandcode,deepseek')
+check('五张卡都在，顺序是配置顺序', (state.json.providers ?? []).map((c) => c.id).join() === 'opencode-go,grok,commandcode,deepseek,bailian')
 let cards = providers(state.json)
 check('OpenCode 卡：三个窗口 + 最坏值', cards['opencode-go'].windows.length === 3 && cards['opencode-go'].worst.used === 33)
 check('Grok 卡：周窗口 + 分项 + 已登录账号', cards.grok.windows[0].key === 'weekly' && cards.grok.parts.length === 2 && cards.grok.credential.account === 'grok@example.com')
@@ -212,6 +212,17 @@ check('DeepSeek 余额来自 /user/balance', cards.deepseek.balance === '¥110.0
 check('余额没有窗口（金额不是百分比）', cards.deepseek.windows.length === 0 && cards.deepseek.worst === null)
 check('余额拆出充值与赠金', /topped up ¥100\.00/.test(cards.deepseek.note) && /granted ¥10\.00/.test(cards.deepseek.note), cards.deepseek.note)
 refs.delete('DEEPSEEK_API_KEY')
+
+// —— 阿里云百炼：没有额度接口，这张卡只存 key ——
+check('百炼卡默认也在，没 key 时标缺凭据', cards.bailian.missing === true && /DASHSCOPE_API_KEY/.test(cards.bailian.error),
+  JSON.stringify(cards.bailian))
+refs.set('DASHSCOPE_API_KEY', 'ds-bailian-key')
+state = await call(ROUTES.refresh, { method: 'POST' })
+cards = providers(state.json)
+check('百炼卡：有 key 也不编窗口', cards.bailian.quota === false && cards.bailian.windows.length === 0 && !cards.bailian.error,
+  JSON.stringify(cards.bailian))
+check('百炼卡：凭据来源如实报告', cards.bailian.credential.source === 'file' && cards.bailian.credential.hint === 'DASHSCOPE_API_KEY')
+refs.delete('DASHSCOPE_API_KEY')
 
 // —— 缺凭据：只有那张卡报缺，别的照旧 ——
 refs.delete('OPENCODE_GO_API_KEY')
@@ -314,9 +325,9 @@ if (fs.existsSync(cliAuth)) {
 const added = await call(ROUTES.providers, { method: 'POST', body: { id: 'my-oc', preset: 'opencode-go', baseURL: 'https://gateway.example/zen/go', label: 'My OC' } })
 check('POST /quota/providers 回 200', added.status === 200, JSON.stringify(added.json))
 let savedRows = configRows[0].options.config.providers
-check('新 provider 落在配置里', savedRows.length === 5 && savedRows[4].id === 'my-oc')
-check('只写了给出的字段', savedRows[4].baseURL === 'https://gateway.example/zen/go' && savedRows[4].label === 'My OC' && savedRows[4].preset === 'opencode-go')
-check('第一次添加会把四个默认目标显式写下来', savedRows.slice(0, 4).map((row) => row.id).join() === 'opencode-go,grok,commandcode,deepseek')
+check('新 provider 落在配置里', savedRows.length === 6 && savedRows[5].id === 'my-oc')
+check('只写了给出的字段', savedRows[5].baseURL === 'https://gateway.example/zen/go' && savedRows[5].label === 'My OC' && savedRows[5].preset === 'opencode-go')
+check('第一次添加会把四个默认目标显式写下来', savedRows.slice(0, 5).map((row) => row.id).join() === 'opencode-go,grok,commandcode,deepseek,bailian')
 check('重复 id 回 409', (await call(ROUTES.providers, { method: 'POST', body: { id: 'opencode-go', preset: 'opencode-go' } })).status === 409)
 check('未知 preset 回 400', (await call(ROUTES.providers, { method: 'POST', body: { id: 'weird', preset: 'nope' } })).status === 400)
 check('非法 id 回 400', (await call(ROUTES.providers, { method: 'POST', body: { id: 'bad id!', preset: 'opencode-go' } })).status === 400)
@@ -329,7 +340,7 @@ const removed = await (async () => {
 })()
 check('POST /quota/providers/remove 回 200', removed.status === 200, JSON.stringify(removed.json))
 savedRows = configRows[0].options.config.providers
-check('移除后配置里没有它了', savedRows.length === 4 && !savedRows.some((row) => row.id === 'my-oc'))
+check('移除后配置里没有它了', savedRows.length === 5 && !savedRows.some((row) => row.id === 'my-oc'))
 check('移除不存在的 provider 回 404', (await call(ROUTES.providersRemove, { method: 'POST', body: { id: 'nope' } })).status === 404)
 check('移除写回时保留了其它字段', configRows[0].options.config.providers.every((row) => typeof row.preset === 'string'))
 
