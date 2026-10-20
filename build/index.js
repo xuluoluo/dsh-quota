@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PRESETS, readQuota, worstOf } from './providers.js'
+import { createUsageStore, usageFile } from './usage.js'
 import { XAI_OAUTH, accountOf, pollDeviceFlow, startDeviceFlow, usableGrant } from './xai-oauth.js'
 
 export const name = 'dsh-quota'
@@ -26,10 +27,15 @@ const ROUTES = Object.freeze({
   refresh: '/quota/refresh',
   key: '/quota/key',
   clear: '/quota/clear',
+  providers: '/quota/providers',
+  providersRemove: '/quota/providers/remove',
   loginStart: '/quota/login/start',
   loginStatus: '/quota/login/status',
   loginCancel: '/quota/login/cancel',
 })
+
+/** The Loader row this bundle inserts — the row a provider is added to. */
+const CONFIG_ID = 'dsh-quota'
 
 /** The record Grok's sign-in writes — `dsh-llm-pi-ai`'s own key for xAI. */
 const XAI_RECORD = 'llm-pi-ai/xai'
@@ -315,7 +321,7 @@ function createSignIn(ctx, settings) {
  * useless. A card that cannot be read says why, in the vendor's own words
  * where there are any.
  */
-function createService(ctx, settings, signIn) {
+function createService(ctx, settings, signIn, usage) {
   const planCache = new Map()
   let snapshot
   let cachedAt = 0
@@ -363,7 +369,11 @@ function createService(ctx, settings, signIn) {
         { id: target.id, preset: target.preset, baseURL: target.baseURL, token: credential.token },
         { timeoutMs: settings.timeoutMs, planCache },
       )
-      const windows = Array.isArray(reading.windows) ? reading.windows : []
+      // The tightest window first: the number that decides whether the next
+      // request works is the one worth reading first.
+      const windows = (Array.isArray(reading.windows) ? reading.windows : [])
+        .slice()
+        .sort((a, b) => (b?.used ?? 0) - (a?.used ?? 0))
       return {
         ...card,
         url: reading.url,
@@ -410,9 +420,14 @@ function createService(ctx, settings, signIn) {
 
   return {
     async state({ force = false } = {}) {
-      if (!settings.enabled) return { enabled: false, fetchedAt: null, refreshMs: settings.refreshMs, providers: [] }
+      const measured = {
+        usage: await usage.summary(),
+        usageFile: usageFile(),
+        presets: Object.entries(PRESETS).map(([id, preset]) => ({ id, label: preset.label, auth: preset.auth })),
+      }
+      if (!settings.enabled) return { enabled: false, fetchedAt: null, refreshMs: settings.refreshMs, providers: [], ...measured }
       if (force || !fresh(Date.now())) await refresh()
-      return { ...snapshot }
+      return { ...snapshot, ...measured }
     },
     targets: () => settings.providers,
   }
@@ -440,14 +455,49 @@ function jsonError(res, status, error) {
   sendJson(res, status, { error })
 }
 
-/** The page's own origin only: a write has to say where it came from. */
+/** A refused cross-site request, saying what it sent so the page can report it. */
+function forbidden(res, req) {
+  sendJson(res, 403, { error: 'forbidden-origin', ...originDetail(req) })
+}
+
+/** The page's own request only: a write has to say where it came from. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
+function isLocalOrigin(value) {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    return LOOPBACK_HOSTS.has(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A request from the page, and not from some other site's page. The desktop
+ * shell may address the same Host as `localhost` or `127.0.0.1` and a renderer
+ * may report `same-origin` without naming the origin, so those count; a page on
+ * another site is none of them.
+ */
 function sameOrigin(req, required) {
   const origin = req.headers.origin
   if (!origin) return !required
+  if (isLocalOrigin(origin)) return true
+  const site = req.headers['sec-fetch-site']
+  if (site === 'same-origin' || site === 'none') return true
   try {
     return new URL(origin).host === req.headers.host
   } catch {
     return false
+  }
+}
+
+/** What a refused request said, so a rejection is diagnosable from the page. */
+function originDetail(req) {
+  return {
+    origin: req.headers.origin ?? '(none)',
+    host: req.headers.host ?? '(none)',
+    site: req.headers['sec-fetch-site'] ?? '(none)',
   }
 }
 
@@ -502,19 +552,19 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.state, async (req, res) => {
     if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, false)) return jsonError(res, 403, 'forbidden-origin')
+    if (!sameOrigin(req, false)) return forbidden(res, req)
     sendJson(res, 200, await service.state())
   })
 
   route(ROUTES.refresh, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return jsonError(res, 403, 'forbidden-origin')
+    if (!sameOrigin(req, true)) return forbidden(res, req)
     sendJson(res, 200, await service.state({ force: true }))
   })
 
   route(ROUTES.key, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return jsonError(res, 403, 'forbidden-origin')
+    if (!sameOrigin(req, true)) return forbidden(res, req)
     const body = await readJson(req)
     const target = targetOf(service, body.id)
     if (!target) return jsonError(res, 404, 'unknown-provider')
@@ -536,7 +586,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.clear, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return jsonError(res, 403, 'forbidden-origin')
+    if (!sameOrigin(req, true)) return forbidden(res, req)
     const body = await readJson(req)
     const target = targetOf(service, body.id)
     if (!target) return jsonError(res, 404, 'unknown-provider')
@@ -558,9 +608,46 @@ function registerRoutes(ctx, service, settings, signIn) {
     sendJson(res, 200, { ok: true })
   })
 
+  route(ROUTES.providers, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req, true)) return forbidden(res, req)
+    const body = await readJson(req)
+    if (!PRESETS[body.preset]) return jsonError(res, 400, `unknown preset "${String(body.preset)}"`)
+    const id = typeof body.id === 'string' ? body.id.trim() : ''
+    if (!ID_PATTERN.test(id)) return jsonError(res, 400, 'the id must start with a letter or digit and hold only letters, digits and dashes')
+    if (service.targets().some((entry) => entry.id === id)) return jsonError(res, 409, `"${id}" is already a provider`)
+    const row = { id, preset: body.preset }
+    for (const key of ['label', 'baseURL', 'apiKeyEnv', 'record']) {
+      const value = typeof body[key] === 'string' ? body[key].trim() : ''
+      if (value !== '') row[key] = value
+    }
+    try {
+      const providers = await editProviders(ctx, (rows) => [...rows, row])
+      sendJson(res, 200, { ok: true, providers })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
+  route(ROUTES.providersRemove, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req, true)) return forbidden(res, req)
+    const body = await readJson(req)
+    const id = typeof body.id === 'string' ? body.id.trim() : ''
+    const targets = service.targets()
+    if (!targets.some((entry) => entry.id === id)) return jsonError(res, 404, 'unknown-provider')
+    if (targets.length <= 1) return jsonError(res, 400, 'at least one provider has to stay')
+    try {
+      const providers = await editProviders(ctx, (rows) => rows.filter((row) => row.id !== id))
+      sendJson(res, 200, { ok: true, providers })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
   route(ROUTES.loginStart, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return jsonError(res, 403, 'forbidden-origin')
+    if (!sameOrigin(req, true)) return forbidden(res, req)
     const body = await readJson(req)
     const target = targetOf(service, body.id)
     if (!target) return jsonError(res, 404, 'unknown-provider')
@@ -574,7 +661,7 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.loginStatus, async (req, res) => {
     if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, false)) return jsonError(res, 403, 'forbidden-origin')
+    if (!sameOrigin(req, false)) return forbidden(res, req)
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
     const id = url.searchParams.get('id') ?? ''
     sendJson(res, 200, signIn.publicOf(id) ?? { status: 'idle' })
@@ -582,17 +669,101 @@ function registerRoutes(ctx, service, settings, signIn) {
 
   route(ROUTES.loginCancel, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-    if (!sameOrigin(req, true)) return jsonError(res, 403, 'forbidden-origin')
+    if (!sameOrigin(req, true)) return forbidden(res, req)
     const body = await readJson(req)
     sendJson(res, 200, { ok: signIn.cancel(typeof body.id === 'string' ? body.id : '') })
   })
+}
+
+// ---- providers, edited through the profile's own patch ---------------------------
+
+/** The Loader row this bundle inserted, as the profile's patch layer sees it. */
+function configRow(ctx) {
+  const editor = ctx.get('configEditor')
+  if (!editor) return undefined
+  let entries
+  try {
+    entries = editor.entries()
+  } catch {
+    return undefined
+  }
+  const entry = entries.find((candidate) => candidate?.options?.id === CONFIG_ID || candidate?.options?.name === '@local/dsh-quota')
+  return entry ? { editor, entry } : undefined
+}
+
+/** The rows a config starts from when it names none — the plugin's defaults. */
+function defaultProviderRows() {
+  return DEFAULT_TARGETS.map((target) => ({ ...target }))
+}
+
+const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/i
+
+/**
+ * Rewrite this plugin's own `providers` list in the profile patch, which is
+ * where every other tunable of this plugin lives and the one layer that
+ * survives upgrades. The config that results is applied through the Loader, so
+ * the page's list and the running targets agree after the reload.
+ */
+async function editProviders(ctx, mutate) {
+  const found = configRow(ctx)
+  if (!found) {
+    throw new Error('this profile does not keep the dsh-quota row in its own patch layer, so the page cannot rewrite the provider list')
+  }
+  let next
+  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+    const base = { ...inherited, ...current }
+    const rows = Array.isArray(base.providers) && base.providers.length > 0
+      ? base.providers.map((row) => ({ ...row }))
+      : defaultProviderRows()
+    next = mutate(rows)
+    return { ...base, providers: next }
+  })
+  return next
+}
+
+// ---- usage ----------------------------------------------------------------------
+
+/**
+ * Every model call's usage, read off the stream waterfall. The wrapper passes
+ * every chunk straight through, so a listener here cannot change what the
+ * conversation sees; only a call that actually delivered a `usage` chunk and
+ * did not fail is counted.
+ */
+function watchStream(usage, options, next) {
+  const upstream = next()
+  return (async function* watched() {
+    let measured
+    let failed = false
+    try {
+      for await (const chunk of upstream) {
+        if (chunk?.type === 'usage' && chunk.usage) measured = chunk.usage
+        if (chunk?.type === 'finish' && (chunk.kind === 'error' || chunk.kind === 'aborted')) failed = true
+        yield chunk
+      }
+    } finally {
+      if (measured && !failed) {
+        usage.record({
+          provider: options?.provider,
+          model: options?.model,
+          usage: measured,
+          purpose: options?.purpose,
+        })
+      }
+    }
+  })()
 }
 
 export function apply(ctx, config) {
   const settings = normalize(config)
   const signIn = createSignIn(ctx, settings)
   ctx.effect(() => () => signIn.dispose())
-  const service = createService(ctx, settings, signIn)
+
+  const usage = createUsageStore()
+  void usage.ready()
+  ctx.effect(() => () => { void usage.flush() })
+  ctx.effect(() => ctx.on('llm/stream', (options, next) => watchStream(usage, options, next)))
+
+  const service = createService(ctx, settings, signIn, usage)
   registerRoutes(ctx, service, settings, signIn)
   log(ctx, 'debug', '[quota] watching %s', settings.providers.map((entry) => entry.preset).join(', '))
 }

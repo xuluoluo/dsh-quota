@@ -8,6 +8,10 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { apply, ROUTES } from '../build/index.js'
 
+// The usage counters live in the DSH home; this run gets a directory of its own.
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-home-'))
+process.env.DSH_HOME = testHome
+
 let failures = 0
 const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `  — ${detail}`}`)
@@ -96,12 +100,27 @@ const credentials = {
 
 // —— 假 ctx 与 HTTP 搬运 ——
 const routes = new Map()
+const listeners = new Map()
+// The profile's own patch layer, as the config editor sees it.
+const configRows = [{ options: { id: 'dsh-quota', name: '@local/dsh-quota', config: {} } }]
+const configEditor = {
+  entries: () => configRows,
+  async edit(entry, change) {
+    const next = change(structuredClone(entry.options.config ?? {}), {})
+    entry.options.config = next
+    return next
+  },
+}
 const ctx = {
   logger: { debug() {}, info() {}, warn() {} },
-  get: (name) => (name === 'credentials' ? credentials : undefined),
+  get: (name) => (name === 'credentials' ? credentials : name === 'configEditor' ? configEditor : undefined),
   effect(fn) {
     const disposer = fn()
     return disposer
+  },
+  on(event, listener) {
+    listeners.set(event, listener)
+    return () => listeners.delete(event)
   },
   webServer: {
     register(route) {
@@ -166,8 +185,11 @@ let cards = providers(state.json)
 check('OpenCode 卡：三个窗口 + 最坏值', cards['opencode-go'].windows.length === 3 && cards['opencode-go'].worst.used === 33)
 check('Grok 卡：周窗口 + 分项 + 已登录账号', cards.grok.windows[0].key === 'weekly' && cards.grok.parts.length === 2 && cards.grok.credential.account === 'grok@example.com')
 check('Command Code 卡：套餐 GOAT + 三个窗口（含当月 credits）',
-  cards.commandcode.plan === 'GOAT' && cards.commandcode.windows.map((w) => w.key).join() === 'five-hour,weekly,credits')
-check('Command Code 卡：5 小时窗口 7/14 = 50%', cards.commandcode.windows[0].used === 50)
+  cards.commandcode.plan === 'GOAT' && cards.commandcode.windows.map((w) => w.key).sort().join() === 'credits,five-hour,weekly')
+check('Command Code 卡：5 小时窗口 7/14 = 50%', cards.commandcode.windows.find((w) => w.key === 'five-hour').used === 50)
+check('窗口按最紧的排在最前', cards.commandcode.windows[0].key === 'credits' &&
+  cards.commandcode.windows.map((w) => w.used).every((used, index, all) => index === 0 || all[index - 1] >= used),
+  JSON.stringify(cards.commandcode.windows))
 check('Command Code 卡：到期与续费来自订阅', cards.commandcode.until === '2026-10-22T11:40:10.000Z' && cards.commandcode.renew === 'off')
 check('卡里带了取 key 的地址', typeof cards['opencode-go'].keysUrl === 'string' && cards['opencode-go'].keysUrl.startsWith('https://'))
 check('凭据来源如实报告', cards['opencode-go'].credential.source === 'file' && cards.grok.credential.source === 'record')
@@ -238,6 +260,7 @@ apply({
   logger: ctx.logger,
   get: () => undefined,
   effect: (fn) => fn(),
+  on: () => () => {},
   webServer: { register: (route) => { bareRoutes.set(route.path, route.handler); return () => {} } },
 }, {})
 const bareState = await (async () => {
@@ -268,6 +291,61 @@ if (fs.existsSync(cliAuth)) {
 } else {
   console.log('SKIP  Command Code CLI 登录：这台机器没有 ~/.commandcode/auth.json')
 }
+
+// —— 添加 / 移除供应商：写进 profile 自己的 patch 层 ——
+const added = await call(ROUTES.providers, { method: 'POST', body: { id: 'my-oc', preset: 'opencode-go', baseURL: 'https://gateway.example/zen/go', label: 'My OC' } })
+check('POST /quota/providers 回 200', added.status === 200, JSON.stringify(added.json))
+let savedRows = configRows[0].options.config.providers
+check('新 provider 落在配置里', savedRows.length === 4 && savedRows[3].id === 'my-oc')
+check('只写了给出的字段', savedRows[3].baseURL === 'https://gateway.example/zen/go' && savedRows[3].label === 'My OC' && savedRows[3].preset === 'opencode-go')
+check('第一次添加会把三个默认目标显式写下来', savedRows.slice(0, 3).map((row) => row.id).join() === 'opencode-go,grok,commandcode')
+check('重复 id 回 409', (await call(ROUTES.providers, { method: 'POST', body: { id: 'opencode-go', preset: 'opencode-go' } })).status === 409)
+check('未知 preset 回 400', (await call(ROUTES.providers, { method: 'POST', body: { id: 'weird', preset: 'nope' } })).status === 400)
+check('非法 id 回 400', (await call(ROUTES.providers, { method: 'POST', body: { id: 'bad id!', preset: 'opencode-go' } })).status === 400)
+const removed = await (async () => {
+  // A real Host reloads the plugin with the edited config; the fake does the same,
+  // so the remove below sees the list the add just wrote.
+  routes.clear()
+  apply(ctx, configRows[0].options.config)
+  return call(ROUTES.providersRemove, { method: 'POST', body: { id: 'my-oc' } })
+})()
+check('POST /quota/providers/remove 回 200', removed.status === 200, JSON.stringify(removed.json))
+savedRows = configRows[0].options.config.providers
+check('移除后配置里没有它了', savedRows.length === 3 && !savedRows.some((row) => row.id === 'my-oc'))
+check('移除不存在的 provider 回 404', (await call(ROUTES.providersRemove, { method: 'POST', body: { id: 'nope' } })).status === 404)
+check('移除写回时保留了其它字段', configRows[0].options.config.providers.every((row) => typeof row.preset === 'string'))
+
+// —— 用量：包住 llm/stream，只记成功的调用 ——
+const watchStream = listeners.get('llm/stream')
+check('注册了 llm/stream 的监听', typeof watchStream === 'function')
+const upstream = async function* () {
+  yield { type: 'usage', usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, reasoningTokens: 5 } }
+  yield { type: 'finish', kind: 'stop' }
+}
+const seen = []
+for await (const chunk of watchStream({ provider: 'opencode-go', model: 'deepseek-v4.1-flash' }, () => upstream())) seen.push(chunk)
+check('包装后的流原样吐出每个 chunk', seen.length === 2 && seen[1].type === 'finish')
+
+let usageView = (await call(ROUTES.state)).json.usage
+check('一次成功调用计入用量', usageView.window.calls === 1 && usageView.window.input === 100 && usageView.window.output === 20, JSON.stringify(usageView.window))
+check('缓存与推理分开记', usageView.window.cacheRead === 30 && usageView.window.reasoning === 5)
+check('按 provider/model 分行', usageView.models.length === 1 && usageView.models[0].provider === 'opencode-go' && usageView.models[0].model === 'deepseek-v4.1-flash')
+check('七天条带给出七个槽', usageView.days.length === 7 && usageView.days.at(-1).calls === 1)
+
+const failedUpstream = async function* () {
+  yield { type: 'usage', usage: { inputTokens: 50 } }
+  yield { type: 'finish', kind: 'error', failure: { code: 'AUTH' } }
+}
+for await (const _chunk of watchStream({ provider: 'grok', model: 'grok-4.6' }, () => failedUpstream())) { /* drain */ }
+usageView = (await call(ROUTES.state)).json.usage
+check('失败的调用不计入', usageView.window.calls === 1, JSON.stringify(usageView.window))
+check('用量文件写在 DSH home 下', typeof usageView === 'object' && (await call(ROUTES.state)).json.usageFile.startsWith(testHome))
+
+// —— 同源判定：本机页面放过，别的站拒掉，并说清原因 ——
+const evil = await call(ROUTES.key, { method: 'POST', body: { id: 'opencode-go', key: 'k' }, origin: 'http://evil.example' })
+check('跨站 POST 回 403 且带回诊断', evil.status === 403 && evil.json.origin === 'http://evil.example' && evil.json.host === HOST, JSON.stringify(evil.json))
+const anotherLocal = await call(ROUTES.key, { method: 'POST', body: { id: 'opencode-go', key: 'from-local-page' }, origin: 'http://localhost:5173' })
+check('本机另一个端口的页面仍算本机', anotherLocal.status === 200 && refs.get('OPENCODE_GO_API_KEY') === 'from-local-page')
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILED`)
 process.exit(failures === 0 ? 0 : 1)

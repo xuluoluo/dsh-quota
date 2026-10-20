@@ -141,10 +141,35 @@ const cardBase = {
   worst: { key: 'monthly', used: 33 },
   credential: { auth: 'key', configured: true, source: 'file', hint: 'OPENCODE_GO_API_KEY', writable: true },
 }
+const usageView = {
+  today: { calls: 1, input: 12000, output: 900, cacheRead: 20000, cacheWrite: 0, reasoning: 300 },
+  window: { calls: 4, input: 47300, output: 3600, cacheRead: 93200, cacheWrite: 0, reasoning: 2300 },
+  days: ['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'].map((date, index) => ({
+    date,
+    calls: index === 6 ? 1 : 0,
+    input: index === 6 ? 12000 : 0,
+    output: index === 6 ? 900 : 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+  })),
+  models: [
+    { provider: 'opencode-go', model: 'deepseek-v4.1-flash', calls: 3, input: 33000, output: 3600, cacheRead: 93200, cacheWrite: 0, reasoning: 2000 },
+    { provider: 'opencode-go', model: 'glm-5.3-flash', calls: 1, input: 14300, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+  ],
+}
+
 const payload = {
   enabled: true,
   fetchedAt: '2026-10-20T05:50:00.000Z',
   refreshMs: 60000,
+  usage: usageView,
+  usageFile: 'C:/Users/x/.dsh/.quota-usage.json',
+  presets: [
+    { id: 'opencode-go', label: 'OpenCode Go', auth: 'key' },
+    { id: 'xai-billing', label: 'Grok', auth: 'oauth' },
+    { id: 'commandcode', label: 'Command Code', auth: 'key' },
+  ],
   providers: [
     cardBase,
     {
@@ -176,6 +201,8 @@ let answer = (url, init) => {
   if (url.includes('/quota/login/status')) return { status: 'pending' }
   if (url.endsWith('/quota/key')) return { ok: true }
   if (url.endsWith('/quota/clear')) return { ok: true }
+  if (url.endsWith('/quota/providers')) return { ok: true }
+  if (url.endsWith('/quota/providers/remove')) return { ok: true }
   return payload
 }
 
@@ -250,6 +277,17 @@ check('套餐与到期写在卡头', pageTexts.join('').includes('套餐 · GOAT
 check('credits 窗口显示金额而不是百分比', pageTexts.includes('$64.78 / $70.00'))
 check('Grok 的产品分项有渲染', pageTexts.includes('GrokBuild 92%'))
 
+// —— 用量 ——
+check('用量：四个数字都在', ['50.9K', '93.2K', '2.3K', '4'].every((value) => pageTexts.includes(value)),
+  JSON.stringify(pageTexts.slice(0, 40)))
+check('用量：输入输出写在 TOKEN 下', pageTexts.join('').includes('输入 47.3K · 输出 3.6K'))
+check('用量：缓存命中率', pageTexts.join('').includes('命中率 66%'))
+check('用量：按模型分行', pageTexts.includes('deepseek-v4.1-flash') && pageTexts.join('').includes('命中率 74%'))
+check('用量：七天条带七根柱子',
+  elements(mini.tree).filter((node) => /^\d{4}-\d{2}-\d{2} · /.test(String(node.props?.title ?? ''))).length === 7)
+check('每个 provider 都有移除按钮',
+  elements(mini.tree).filter((node) => node.type === 'button' && textsOf(node).join('') === '移除').length === 3)
+
 // —— 设置页：凭据状态与动作 ——
 check('已存储的 key 说了来源', pageTexts.join('').includes('已存入 DSH 凭据库'))
 check('CLI 登录说了账号', pageTexts.join('').includes('使用 Command Code CLI 的登录') && pageTexts.join('').includes('xuluoluo'))
@@ -269,6 +307,19 @@ const keyCall = calls.find((call) => call.url.endsWith('/quota/key'))
 check('保存打了 /quota/key', Boolean(keyCall), JSON.stringify(calls.map((c) => c.url)))
 check('保存把 key 原样（不带空白）发给 Host', keyCall && JSON.parse(keyCall.body).key === 'sk-test-123', keyCall?.body)
 check('保存带上 provider id', keyCall && JSON.parse(keyCall.body).id === 'opencode-go')
+
+// —— 添加供应商 ——
+const idField = elements(mini.tree).find((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id'))
+check('页面底部有添加供应商的表单', Boolean(idField) && pageTexts.includes('添加供应商'))
+idField.props.onChange({ target: { value: 'my-oc' } })
+await tick()
+const addButton = elements(mini.tree).find((node) => node.type === 'button' && textsOf(node).join('') === '添加')
+check('填了 id 之后添加按钮可用', Boolean(addButton))
+addButton.props.onClick()
+await tick(80)
+const addCall = calls.find((call) => call.url.endsWith('/quota/providers'))
+check('添加打了 /quota/providers', Boolean(addCall), JSON.stringify(calls.map((call) => call.url)))
+check('添加带上预设与 id', addCall && JSON.parse(addCall.body).id === 'my-oc' && JSON.parse(addCall.body).preset === 'opencode-go', addCall?.body)
 
 // 登录：点按钮 → 出设备码面板
 const signIn = findByText(mini.tree, '登录 Grok')

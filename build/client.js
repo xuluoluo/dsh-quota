@@ -16,6 +16,8 @@ window.__ModuleLoader__.load({
       refresh: '/quota/refresh',
       key: '/quota/key',
       clear: '/quota/clear',
+      providers: '/quota/providers',
+      providersRemove: '/quota/providers/remove',
       loginStart: '/quota/login/start',
       loginStatus: '/quota/login/status',
       loginCancel: '/quota/login/cancel',
@@ -79,6 +81,35 @@ window.__ModuleLoader__.load({
       win_onDemand: '按需',
       win_credits: '当月额度',
       win_period: '本期',
+      // 用量
+      usageTitle: '用量',
+      usageRange: '近 7 天',
+      uToday: '今天',
+      uTokens: 'TOKEN',
+      uInput: '输入',
+      uOutput: '输出',
+      uCache: '缓存读取',
+      uHit: '命中率',
+      uReasoning: '推理',
+      uCalls: '次调用',
+      uCountedOut: '计入输出',
+      uModels: '模型',
+      uEmpty: '还没有用量记录：插件会从下一次模型调用开始统计',
+      uFrom: '统计自每次调用返回的 usage',
+      // 供应商
+      addTitle: '添加供应商',
+      addHint: '写进 profile 的 cordis.patch.yml，重启也还在；同一个预设可以加多个（不同网关 / 不同 key）。',
+      addPreset: '预设',
+      addId: 'id（唯一，字母数字与横线）',
+      addLabel: '显示名（可选）',
+      addBase: '网关地址（可选）',
+      addKeyEnv: '凭据引用（可选，如 MY_KEY）',
+      addSubmit: '添加',
+      adding: '添加中…',
+      added: '已添加',
+      remove: '移除',
+      removeFailed: '移除失败',
+      needId: '先填 id',
     }
 
     var en = {
@@ -136,6 +167,33 @@ window.__ModuleLoader__.load({
       win_onDemand: 'On-demand',
       win_credits: 'Month credits',
       win_period: 'Period',
+      usageTitle: 'Usage',
+      usageRange: 'last 7 days',
+      uToday: 'Today',
+      uTokens: 'TOKENS',
+      uInput: 'in',
+      uOutput: 'out',
+      uCache: 'cache read',
+      uHit: 'hit rate',
+      uReasoning: 'reasoning',
+      uCalls: 'calls',
+      uCountedOut: 'counted in output',
+      uModels: 'Models',
+      uEmpty: 'No usage yet: counting starts at the next model call',
+      uFrom: 'from the usage each call reports',
+      addTitle: 'Add a provider',
+      addHint: 'Written into the profile cordis.patch.yml, so it survives a restart. One preset can be added more than once (another gateway, another key).',
+      addPreset: 'Preset',
+      addId: 'id (unique; letters, digits, dashes)',
+      addLabel: 'Label (optional)',
+      addBase: 'Gateway URL (optional)',
+      addKeyEnv: 'Credential reference (optional, e.g. MY_KEY)',
+      addSubmit: 'Add',
+      adding: 'Adding…',
+      added: 'Added',
+      remove: 'Remove',
+      removeFailed: 'Removing failed',
+      needId: 'Enter an id first',
     }
 
     // —— 主题令牌：只用 DSH 自己公布的别名 ——
@@ -196,7 +254,11 @@ window.__ModuleLoader__.load({
         ...options,
       }).then(function (response) {
         return response.json().catch(function () { return {} }).then(function (body) {
-          if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'HTTP ' + response.status)
+          if (!response.ok) {
+            var said = typeof body.error === 'string' ? body.error : 'HTTP ' + response.status
+            var detail = body.origin ? ' · origin=' + body.origin + ' host=' + body.host + ' site=' + body.site : ''
+            throw new Error(said + detail)
+          }
           return body
         })
       }).finally(function () { clearTimeout(timer) })
@@ -213,6 +275,11 @@ window.__ModuleLoader__.load({
         enabled: data.enabled !== false,
         fetchedAt: typeof data.fetchedAt === 'string' ? data.fetchedAt : null,
         refreshMs: typeof data.refreshMs === 'number' && data.refreshMs >= 10000 ? data.refreshMs : 60000,
+        usage: data.usage && typeof data.usage === 'object' ? data.usage : null,
+        usageFile: typeof data.usageFile === 'string' ? data.usageFile : '',
+        presets: Array.isArray(data.presets) ? data.presets.filter(function (preset) {
+          return preset && typeof preset === 'object' && typeof preset.id === 'string'
+        }) : [],
         providers: providers.filter(function (card) { return card && typeof card === 'object' && typeof card.id === 'string' }),
       }
     }
@@ -501,7 +568,9 @@ window.__ModuleLoader__.load({
         card.plan
           ? h('span', { style: { fontSize: '11px', color: C.brand, border: '1px solid ' + C.brand, borderRadius: '999px', padding: '0 6px' } }, t('plan') + ' · ' + card.plan)
           : null,
-        term ? h('span', { style: { fontSize: '11px', color: C.minor, marginLeft: 'auto' } }, term) : null),
+        h('span', { style: { flex: '1' } }),
+        term ? h('span', { style: { fontSize: '11px', color: C.minor } }, term) : null,
+        h('button', { type: 'button', style: buttonQuiet, title: t('remove'), onClick: props.onRemove }, t('remove'))),
 
       windows.length > 0
         ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
@@ -553,6 +622,213 @@ window.__ModuleLoader__.load({
       props.notice
         ? h('div', { style: { fontSize: '11px', color: props.notice.error ? C.error : C.success } }, props.notice.text)
         : null)
+    }
+
+    // —— 用量 ——
+    function compact(value) {
+      var number = Number(value) || 0
+      if (number >= 1e6) return (number / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'
+      if (number >= 1e3) return (number / 1e3).toFixed(1).replace(/\.0$/, '') + 'K'
+      return String(Math.round(number))
+    }
+
+    /** 缓存命中率：缓存读取 /（缓存读取 + 新输入）。 */
+    function hitRate(cacheRead, input) {
+      var cached = Number(cacheRead) || 0
+      var fresh = Number(input) || 0
+      var total = cached + fresh
+      return total > 0 ? Math.round((cached / total) * 100) : 0
+    }
+
+    var tile = { display: 'flex', flexDirection: 'column', gap: '2px', padding: '10px 14px', minWidth: '0' }
+
+    function UsageTile(props) {
+      return h('div', {
+        style: Object.assign({}, tile, { borderLeft: props.first ? 'none' : '1px solid ' + C.border }),
+      },
+      h('div', { style: { fontSize: '19px', lineHeight: '24px', color: C.text, fontWeight: '500' } }, props.value),
+      h('div', { style: { fontSize: '10px', letterSpacing: '.06em', color: C.minor, textTransform: 'uppercase' } }, props.label),
+      props.note ? h('div', { style: { fontSize: '11px', color: C.minor } }, props.note) : null)
+    }
+
+    function UsageSection(props) {
+      var t = props.t
+      var usage = props.usage
+      if (!usage || !usage.window) return null
+      var week = usage.window
+      var tokens = (week.input || 0) + (week.output || 0)
+      var biggest = 0
+      var peak = 0
+      ;(usage.models || []).forEach(function (line) { biggest = Math.max(biggest, (line.input || 0) + (line.output || 0)) })
+      ;(usage.days || []).forEach(function (day) { peak = Math.max(peak, (day.input || 0) + (day.output || 0)) })
+
+      return h('section', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+        h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' } },
+          h('h3', { style: { margin: 0, fontSize: '13px', fontWeight: '500', color: C.text } }, t('usageTitle')),
+          h('span', { style: { fontSize: '11px', color: C.minor } }, t('usageRange')),
+          h('span', { style: { flex: '1' } }),
+          h('span', { style: { fontSize: '11px', color: C.minor } }, t('uFrom'))),
+
+        h('div', {
+          style: {
+            border: '1px solid ' + C.border, background: C.surface, borderRadius: '12px',
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', overflow: 'hidden',
+          },
+        },
+        h(UsageTile, {
+          first: true,
+          value: compact(tokens),
+          label: t('uTokens'),
+          note: t('uInput') + ' ' + compact(week.input) + ' · ' + t('uOutput') + ' ' + compact(week.output),
+        }),
+        h(UsageTile, { value: compact(week.cacheRead), label: t('uCache'), note: t('uHit') + ' ' + hitRate(week.cacheRead, week.input) + '%' }),
+        h(UsageTile, { value: compact(week.reasoning), label: t('uReasoning'), note: t('uCountedOut') }),
+        h(UsageTile, { value: compact(week.calls), label: t('uCalls'), note: t('uToday') + ' ' + compact(usage.today && usage.today.calls) })),
+
+        peak > 0
+          ? h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '4px', height: '34px', padding: '0 2px' } },
+            (usage.days || []).map(function (day) {
+              var value = (day.input || 0) + (day.output || 0)
+              var height = Math.max(2, Math.round((value / peak) * 34))
+              return h('div', {
+                key: day.date,
+                title: day.date + ' · ' + compact(value) + ' · ' + compact(day.calls),
+                style: {
+                  flex: '1', height: height + 'px', borderRadius: '2px 2px 0 0',
+                  background: value > 0 ? C.brand : C.surface2,
+                },
+              })
+            }))
+          : null,
+
+        (usage.models || []).length > 0
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+            h('div', { style: { fontSize: '11px', color: C.minor, textTransform: 'uppercase', letterSpacing: '.04em' } }, t('uModels')),
+            (usage.models || []).map(function (line) {
+              var total = (line.input || 0) + (line.output || 0)
+              return h('div', {
+                key: line.provider + '/' + line.model,
+                style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
+              },
+              h('span', {
+                style: { fontSize: '12px', color: C.text, minWidth: '140px', flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+              }, line.model),
+              h('span', { style: { fontSize: '11px', color: C.minor, width: '84px', flex: 'none' } }, line.provider),
+              h('div', { style: { flex: '1', height: '4px', borderRadius: '999px', background: C.surface2, overflow: 'hidden', minWidth: '40px' } },
+                h('div', {
+                  style: {
+                    width: (biggest > 0 ? Math.round((total / biggest) * 100) : 0) + '%',
+                    height: '4px', background: C.brand, borderRadius: '999px',
+                  },
+                })),
+              h('span', { style: { fontSize: '11px', color: C.minor, minWidth: '148px', textAlign: 'right', flex: 'none' } },
+                compact(line.input) + ' / ' + compact(line.output) + ' · ' + t('uHit') + ' ' + hitRate(line.cacheRead, line.input) + '%'),
+              h('span', { style: { fontSize: '12px', color: C.text, width: '52px', textAlign: 'right', flex: 'none' } }, compact(total)))
+            }))
+          : h('div', { style: { fontSize: '12px', color: C.minor } }, t('uEmpty')))
+    }
+
+    // —— 添加供应商 ——
+    var field = {
+      border: '1px solid ' + C.border, background: C.surface2, color: C.text,
+      borderRadius: '8px', padding: '5px 8px', fontSize: '12px', fontFamily: 'inherit', outline: 'none',
+    }
+
+    function AddProvider(props) {
+      var t = props.t
+      var presets = Array.isArray(props.presets) ? props.presets : []
+      var presetState = React.useState('')
+      var draftState = React.useState({ id: '', label: '', baseURL: '', apiKeyEnv: '' })
+      var busyState = React.useState(false)
+      var errorState = React.useState('')
+      var chosen = presetState[0]
+      var draft = draftState[0]
+      var busy = busyState[0]
+      var error = errorState[0]
+      var active = chosen || (presets[0] ? presets[0].id : '')
+
+      function edit(key, value) {
+        var next = Object.assign({}, draft)
+        next[key] = value
+        draftState[1](next)
+      }
+
+      function submit() {
+        var id = (draft.id || '').trim()
+        if (id === '') {
+          errorState[1](t('needId'))
+          return
+        }
+        busyState[1](true)
+        errorState[1]('')
+        postJson(ROUTES.providers, {
+          preset: active,
+          id: id,
+          label: draft.label,
+          baseURL: draft.baseURL,
+          apiKeyEnv: draft.apiKeyEnv,
+        })
+          .then(function () {
+            draftState[1]({ id: '', label: '', baseURL: '', apiKeyEnv: '' })
+            props.onChanged()
+          })
+          .catch(function (failure) {
+            errorState[1](failure instanceof Error ? failure.message : String(failure))
+            // The edit reloads the Host plugin, so the response can be lost
+            // after the write landed; refresh anyway and let the list speak.
+            props.onChanged()
+          })
+          .finally(function () { busyState[1](false) })
+      }
+
+      return h('section', {
+        style: {
+          border: '1px solid ' + C.border, background: C.surface, borderRadius: '12px',
+          padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px',
+        },
+      },
+      h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px' } },
+        h('h3', { style: { margin: 0, fontSize: '13px', fontWeight: '500', color: C.text } }, t('addTitle')),
+        h('span', { style: { fontSize: '11px', color: C.minor } }, t('addHint'))),
+      h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+        h('select', {
+          value: active,
+          onChange: function (event) { presetState[1](event.target.value) },
+          style: Object.assign({}, field, { minWidth: '150px' }),
+        }, presets.map(function (preset) {
+          return h('option', { key: preset.id, value: preset.id }, preset.label)
+        })),
+        h('input', {
+          value: draft.id,
+          placeholder: t('addId'),
+          onChange: function (event) { edit('id', event.target.value) },
+          style: Object.assign({}, field, { width: '160px' }),
+        }),
+        h('input', {
+          value: draft.label,
+          placeholder: t('addLabel'),
+          onChange: function (event) { edit('label', event.target.value) },
+          style: Object.assign({}, field, { width: '140px' }),
+        }),
+        h('input', {
+          value: draft.baseURL,
+          placeholder: t('addBase'),
+          onChange: function (event) { edit('baseURL', event.target.value) },
+          style: Object.assign({}, field, { flex: '1', minWidth: '160px' }),
+        }),
+        h('input', {
+          value: draft.apiKeyEnv,
+          placeholder: t('addKeyEnv'),
+          onChange: function (event) { edit('apiKeyEnv', event.target.value) },
+          style: Object.assign({}, field, { width: '170px' }),
+        }),
+        h('button', {
+          type: 'button',
+          style: Object.assign({}, buttonPrimary, busy ? disabledStyle : {}),
+          disabled: busy,
+          onClick: submit,
+        }, busy ? t('adding') : t('addSubmit'))),
+      error ? h('div', { style: { fontSize: '11px', color: C.error } }, error) : null)
     }
 
     // —— 设置页 ——
@@ -638,6 +914,12 @@ window.__ModuleLoader__.load({
       function onClear(card) {
         void run(card.id, postJson(ROUTES.clear, { id: card.id }))
       }
+      function onRemove(card) {
+        var next = Object.assign({}, logins)
+        delete next[card.id]
+        setLogins(next)
+        void run(card.id, postJson(ROUTES.providersRemove, { id: card.id }))
+      }
       function onSignIn(card) {
         setWorking(card.id)
         setNotice(card.id, null)
@@ -679,6 +961,8 @@ window.__ModuleLoader__.load({
 
         h('p', { style: { margin: 0, fontSize: '12px', lineHeight: '19px', color: C.minor } }, t('intro')),
 
+        h(UsageSection, { t: t, usage: data && data.usage }),
+
         state.error
           ? h('p', { style: { margin: 0, fontSize: '12px', color: C.error } },
             state.error + (state.data ? ' · ' + t('stale') : ''))
@@ -706,10 +990,17 @@ window.__ModuleLoader__.load({
               onSignIn: function () { onSignIn(card) },
               onSignOut: function () { onSignOut(card) },
               onCancelLogin: function () { onCancelLogin(card) },
+              onRemove: function () { onRemove(card) },
               login: logins[card.id] || card.login,
               notice: notices[card.id],
             })
-          })))
+          })),
+
+        h(AddProvider, {
+          t: t,
+          presets: data && data.presets,
+          onChanged: function () { void store.refresh() },
+        }))
     }
 
     // —— 注册 ——
