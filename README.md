@@ -148,7 +148,24 @@ ali:
 （避免把 key 当引用带到页面上）。
 同一个预设可以加多次 —— 换网关、换 key、换账号都行。
 
-## 五、安装
+## 五、输入预测（输入框里的灰字）
+
+参考 [yepyeel/dsh-prompt-suggestion](https://github.com/yepyeel/dsh-prompt-suggestion) 的做法，
+在这里重写了一份，和额度共用一套 Host。行为：
+
+1. 一轮回答**结束**（最后一条事件是 `turn/end` 且 `reason.kind = completed`）、输入框**空着**、
+   会话**没在跑** → 隔 `debounceMs`（默认 700ms）去问一次模型；
+2. 模型答案洗掉引号/列表符号、只留第一行，作为灰字贴在**光标后面**（`conversation.input.overlay`）；
+3. **Tab 或 → 填入**（`inputActions.captureInsertion()` + `insertText`），Esc 忽略，**永不自动发送**；
+   一旦你开始打字，灰字和那次请求一起作废（`AbortController`）；
+4. 用哪个模型：设置里指定就听指定的，否则跟随当前会话的选择，再否则用 profile 的默认模型。
+
+**预测本身是一次真实的模型调用**，会算进上面的用量与花费 —— 不这样反而会骗自己。
+
+设置页最下面就是它的开关、模型下拉和提示词（留空用内置的那段）。
+Host 侧只有 `build/prediction.js` 一个文件：`suggest(sessionId)` 读 `ctx.sessions` 里那个会话的
+事件流与 `deriveMessages()`，调 `ctx.llm.stream(...)` 收 `text-delta`。
+## 六、安装
 
 已经在 `desktop` profile 里装好了（`@local/dsh-quota`）。重装/更新：
 
@@ -159,7 +176,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 生效规则：**客户端 JS 每次页面加载都重新读盘**，改 `build/client.js` 后刷新页面即可；
 **Host 侧（`index.js` / `providers.js` / `usage.js` / `xai-oauth.js`）换了代码要重启 DSH**。
 
-## 六、配置（都是可选的）
+## 七、配置（都是可选的）
 
 ```yaml
 - id: dsh-quota
@@ -187,6 +204,14 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       - id: my-oc                  # 换网关：baseURL 替换预设的默认根路径
         preset: opencode-go
         baseURL: https://opencode.ai/inference/go
+    predict:               # 输入预测（默认关）
+      enabled: true
+      provider: opencode-go   # 留空则跟随会话模型
+      model: deepseek-v4.1-flash
+      systemPrompt: ''         # 留空用内置提示词
+      maxTokens: 120
+      maxContextMessages: 12
+      debounceMs: 700
     showChip: true         # 把 composer 右侧那枚 chip 打开（默认只有下方窄条）
     alertAt: 90            # 最紧窗口到这个百分比 → ⚠ 接近上限
     alertCriticalAt: 97    # 再到这个 → ⚠ 已达上限（红色）
@@ -195,7 +220,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       "opencode-go/deepseek-v4.1-flash": { input: 0.15, output: 0.6, cacheRead: 0.003 }
 ```
 
-## 七、HTTP 面（前端与 Host 之间）
+## 八、HTTP 面（前端与 Host 之间）
 
 都是同源 JSON，写在 `build/index.js` 的 `ROUTES`：
 
@@ -206,6 +231,9 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 | POST | `/quota/key` | `{id, key}` → 写凭据库 |
 | POST | `/quota/clear` | `{id}` → key 就 unset，oauth 就删记录 |
 | POST | `/quota/test` | `{id}` → 真打一次厂商接口，回 `{ok, detail}`（页面上的「测试」按钮） |
+| POST | `/quota/suggest` | `{sessionId}` → `{suggestion, reason}`；关掉时 `reason: disabled`，不碰模型 |
+| GET | `/quota/models` | 预测的模型下拉：`{groups: [{provider, name, models}]}` |
+| POST | `/quota/predict` | `{enabled?, provider?, model?, systemPrompt?, maxTokens?, debounceMs?}` → 写进 patch |
 | POST | `/quota/providers` | `{preset, id, label?, baseURL?, apiKeyEnv?}` → 追加到 patch |
 | POST | `/quota/providers/remove` | `{id}` → 从 patch 移除（至少留一个）；带 `route` 的预设顺带删掉 `llm-pi-ai` 里那条模型路由 |
 | POST | `/quota/login/start` | 领设备码，返回 `userCode` / 授权链接 |
@@ -224,7 +252,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 本机任意进程都能读到这些数字 —— 在「本机进程本来就能读 `~/.dsh/.credentials.yaml`」的前提下，
 这不算新增暴露面。
 
-## 八、验证
+## 九、验证
 
 ```powershell
 cd plugins\dsh-quota
@@ -232,7 +260,8 @@ cd plugins\dsh-quota
 node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 项）
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
 node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（78 项）
-node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、存 key、登录、加供应商（60 项）
+node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、预测灰字、存 key、登录、加供应商（66 项）
+node test\prediction.test.mjs                 # 预测：摘录、清洗、空闲判断、模型选择（20 项）
 
 node tools\grok-login.test.mjs                # grok-login 的 YAML 写入回归（读本机凭据文件）
 ```
@@ -256,13 +285,13 @@ commandcode  5h 0%  weekly 12%  当月 $69.93 / $70.00  plan=GOAT  10-22 到期�
 **没验到的**：真实浏览器里的像素级观感（没有浏览器控制）。client bundle 的行为用最小 hooks
 运行时跑通了，slot 注册与文档里的名字一致。
 
-## 九、回滚
+## 十、回滚
 
 - `plugin_manager remove_bundle  target = @local/dsh-quota`，或删掉 profile patch 里那一行；
 - Grok 登录写的是 `llm-pi-ai/xai`，删掉它等于退出登录，不影响其它记录；
 - `~/.dsh/.quota-usage.json` 可以随便删，删掉只是用量清零。
 
-## 十、目录
+## 十一、目录
 
 ```
 package.json          dsh.bundle.patch + dsh.client + exports/files
@@ -272,6 +301,7 @@ locale/{en,zh}.json   meta.title / meta.description
 build/providers.js    四个 reader + fetch（纯函数）
 build/usage.js        用量折叠 / 汇总 / 花费折算 / 落盘（纯函数 + 一个小 store）
 build/prices.js       目录价表（由 tools/gen-prices.mjs 生成，USD / 百万 token）
+build/prediction.js   输入预测：读会话、问模型、洗答案（纯函数 + 一个小服务）
 build/xai-oauth.js    设备码 / 续期 / grant 形状（fetch 注入）
 build/index.js        Host：配置、快照、路由、登录、供应商、用量接线
 build/client.js       Client：chip + 设置页（纯 JS，无构建步骤）

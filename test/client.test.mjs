@@ -46,7 +46,17 @@ function createMiniReact() {
       const index = inst.index++
       if (inst.effects.has(index)) return
       inst.effects.add(index)
-      fn()
+      const cleanup = fn()
+      return cleanup
+    },
+    useRef(initial) {
+      const inst = current
+      const index = inst.index++
+      if (!(index in inst.hooks)) inst.hooks[index] = { current: initial }
+      return inst.hooks[index]
+    },
+    useCallback(fn) {
+      return fn
     },
   }
 
@@ -87,6 +97,9 @@ function createMiniReact() {
   return {
     React,
     mount(component, props = {}) {
+      // A fresh mount is a fresh tree: effects run again, exactly like a
+      // component that was just re-created.
+      for (const inst of instances.values()) inst.effects.clear()
       root = { type: component, props, children: [] }
       return draw()
     },
@@ -222,6 +235,8 @@ let answer = (url, init) => {
   if (url.endsWith('/quota/key')) return { ok: true }
   if (url.endsWith('/quota/clear')) return { ok: true }
   if (url.endsWith('/quota/test')) return { ok: true, detail: '178 models' }
+  if (url.endsWith('/quota/suggest')) return { suggestion: '继续把测试补上' }
+  if (url.endsWith('/quota/models')) return { groups: [{ provider: 'opencode-go', name: 'OpenCode Go', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] }] }
   if (url.endsWith('/quota/providers')) return { ok: true }
   if (url.endsWith('/quota/providers/remove')) return { ok: true }
   return payload
@@ -260,7 +275,7 @@ const ctx = {
 }
 mod.apply(ctx)
 
-check('注册了三个 slot', slots.length === 3 && slots.map((s) => s.spec.name).sort().join() === 'conversation.composer.dock,conversation.input.right,settings.section', JSON.stringify(slots.map((s) => s.spec.name)))
+check('注册了四个 slot', slots.length === 4 && slots.map((s) => s.spec.name).sort().join() === 'conversation.composer.dock,conversation.input.overlay,conversation.input.right,settings.section', JSON.stringify(slots.map((s) => s.spec.name)))
 const chipSlot = slots.find((s) => s.spec.name === 'conversation.input.right')
 const stripSlot = slots.find((s) => s.spec.name === 'conversation.composer.dock')
 const pageSlot = slots.find((s) => s.spec.name === 'settings.section')
@@ -402,6 +417,70 @@ await failChip.props.onClick()
 await tick(40)
 const failTexts = textsOf(mini.tree)
 check('出错时仍显示 provider 且标 !', failTexts.includes('Grok') && failTexts.includes('!'), JSON.stringify(failTexts))
+
+// —— 输入预测：空输入框里要一次预测，Tab 接受 ——
+const keyHandlers = []
+const inserted = []
+globalThis.window = Object.assign(globalThis, {
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 0,
+  clearInterval: () => {},
+  addEventListener(type, fn) { if (type === 'keydown') keyHandlers.push(fn) },
+  removeEventListener() {},
+  getSelection: () => null,
+  getComputedStyle: () => ({ font: '14px serif', lineHeight: '20px', color: '#000' }),
+})
+
+const ghostEntry = slots.find((slot) => slot.spec.name === 'conversation.input.overlay')
+const actions = {
+  captureInsertion: () => ({ anchor: 0 }),
+  insertText: (text) => { inserted.push(text); return true },
+}
+const ghostProps = (overrides) => Object.assign({
+  sessionId: 'session-1',
+  useInput: (select) => select({ draft: '', attachmentIds: [] }),
+  useSession: (select) => select({ running: false }),
+  inputActions: actions,
+  t: (key) => key,
+}, overrides)
+
+// 让 store 抓一次新快照：点一下 chip 就是 refresh
+async function refreshStore() {
+  mini.mount(chipSlot.component)
+  await tick()
+  const chip = byAttr(mini.tree, 'data-dsh-quota', 'chip')
+  if (chip) {
+    await chip.props.onClick()
+    await tick(60)
+  }
+}
+
+answer = (url) => (url.endsWith('/quota/suggest') ? { suggestion: '继续把测试补上' } : { ...payload, predict: { enabled: false, debounceMs: 200 } })
+await refreshStore()
+mini.mount(ghostEntry.component, ghostProps())
+await tick(50)
+check('预测关掉时什么都不渲染', mini.tree === null)
+
+answer = (url) => (url.endsWith('/quota/suggest') ? { suggestion: '继续把测试补上' } : { ...payload, predict: { enabled: true, debounceMs: 200 } })
+await refreshStore()
+mini.mount(ghostEntry.component, ghostProps({ useInput: (select) => select({ draft: '已输入', attachmentIds: [] }) }))
+await tick(300)
+check('输入框有字时不去问', !calls.some((call) => call.url.endsWith('/quota/suggest')))
+
+calls.length = 0
+mini.mount(ghostEntry.component, ghostProps())
+await tick(400)
+const predictCall = calls.find((call) => call.url.endsWith('/quota/suggest'))
+check('空输入框 + 空闲 → 请求一次预测', Boolean(predictCall) && JSON.parse(predictCall.body).sessionId === 'session-1',
+  JSON.stringify(calls.map((call) => call.url)))
+check('预测结果不自动填入', inserted.length === 0)
+check('预测的灰字挂在 composer 的 overlay 槽里', Boolean(byAttr(mini.tree, 'data-dsh-quota', 'ghost')))
+
+const tab = keyHandlers[keyHandlers.length - 1]
+tab({ key: 'Tab', shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}, stopPropagation() {} })
+await tick(20)
+check('Tab 才把预测填进输入框', inserted[0] === '继续把测试补上', JSON.stringify(inserted))
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILED`)
 process.exit(failures === 0 ? 0 : 1)

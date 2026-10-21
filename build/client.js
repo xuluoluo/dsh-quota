@@ -17,6 +17,9 @@ window.__ModuleLoader__.load({
       key: '/quota/key',
       clear: '/quota/clear',
       test: '/quota/test',
+      suggest: '/quota/suggest',
+      models: '/quota/models',
+      predict: '/quota/predict',
       providers: '/quota/providers',
       providersRemove: '/quota/providers/remove',
       loginStart: '/quota/login/start',
@@ -122,6 +125,15 @@ window.__ModuleLoader__.load({
       costEstimate: '按目录价估算',
       todayCost: '今日',
       stripTitle: '额度与今日花费（点一下刷新）',
+      predictTitle: '输入预测',
+      predictHint: '每轮回答结束后，在空输入框里用灰字提示你的下一句。按 Tab 或 → 填入，不会自动发送。',
+      predictEnable: '启用输入预测',
+      predictModel: '用哪个模型预测',
+      predictSession: '跟随当前会话的模型',
+      predictPrompt: '提示词（留空用内置的）',
+      predictSave: '保存',
+      predictSaved: '已保存',
+      predictFee: '预测也是一次真实的模型调用，会计入上面的用量。',
     }
 
     var en = {
@@ -217,6 +229,15 @@ window.__ModuleLoader__.load({
       costEstimate: 'estimate from list prices',
       todayCost: 'today',
       stripTitle: 'Allowance and today cost (click to refresh)',
+      predictTitle: 'Input prediction',
+      predictHint: 'After each reply, a gray prediction of your next message appears in the empty composer. Tab or → fills it in; it never sends.',
+      predictEnable: 'Enable input prediction',
+      predictModel: 'Model used to predict',
+      predictSession: 'Follow the session model',
+      predictPrompt: 'Prompt (empty uses the built-in one)',
+      predictSave: 'Save',
+      predictSaved: 'Saved',
+      predictFee: 'A prediction is a real model call, so it counts in the usage above.',
     }
 
     // —— 主题令牌：只用 DSH 自己公布的别名 ——
@@ -301,6 +322,16 @@ window.__ModuleLoader__.load({
         usage: data.usage && typeof data.usage === 'object' ? data.usage : null,
         usageFile: typeof data.usageFile === 'string' ? data.usageFile : '',
         showChip: data.showChip === true,
+        predict: data.predict && typeof data.predict === 'object'
+          ? {
+            enabled: data.predict.enabled === true,
+            provider: typeof data.predict.provider === 'string' ? data.predict.provider : '',
+            model: typeof data.predict.model === 'string' ? data.predict.model : '',
+            systemPrompt: typeof data.predict.systemPrompt === 'string' ? data.predict.systemPrompt : '',
+            debounceMs: Number(data.predict.debounceMs) > 0 ? Number(data.predict.debounceMs) : 700,
+          }
+          : { enabled: false, provider: '', model: '', systemPrompt: '', debounceMs: 700 },
+        defaultPrompt: typeof data.defaultPrompt === 'string' ? data.defaultPrompt : '',
         presets: Array.isArray(data.presets) ? data.presets.filter(function (preset) {
           return preset && typeof preset === 'object' && typeof preset.id === 'string'
         }) : [],
@@ -511,6 +542,149 @@ window.__ModuleLoader__.load({
         h('span', { style: { color: card.alert || card.error ? colorOf(tone) : C.text } }, (card.alert ? '⚠ ' : '') + value))
       }),
       cost ? h('span', { style: { marginLeft: 'auto' } }, t('todayCost') + ' ≈' + cost) : null)
+    }
+
+    // —— 输入预测：空输入框里的灰字 ——
+    /**
+     * 灰字贴在光标后面。位置来自选区：容器（这个 overlay 槽）通常在 composer
+     * 内部，所以把光标的视口坐标减去容器的坐标就是相对位置。
+     */
+    function caretBox(container, ghost) {
+      if (!container || typeof window === 'undefined' || typeof window.getSelection !== 'function') return null
+      var selection = window.getSelection()
+      if (!selection || selection.rangeCount === 0) return null
+      var range = selection.getRangeAt(0)
+      var rect = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null
+      if (!rect || (rect.width === 0 && rect.height === 0)) return null
+      var base = container.getBoundingClientRect()
+      var editor = container.parentElement ? container.parentElement.querySelector('[contenteditable="true"]') : null
+      var style = editor && typeof window.getComputedStyle === 'function' ? window.getComputedStyle(editor) : null
+      return {
+        left: rect.right - base.left,
+        top: rect.top - base.top,
+        font: style ? style.font : 'inherit',
+        lineHeight: style ? style.lineHeight : '20px',
+        color: style ? style.color : 'inherit',
+      }
+    }
+
+    function PromptGhost(props) {
+      var state = useQuota()
+      var data = state.data
+      var predict = data && data.predict
+      var enabled = Boolean(predict && predict.enabled)
+      var debounceMs = predict && Number(predict.debounceMs) > 0 ? Number(predict.debounceMs) : 700
+
+      // 这三个 hook 由槽提供；缺席时退化成「什么都看不到」，不会打断渲染。
+      var useInput = typeof props.useInput === 'function' ? props.useInput : function () { return function () {} }
+      var useSession = typeof props.useSession === 'function' ? props.useSession : function () { return function () {} }
+      var input = useInput(function (snapshot) { return snapshot })
+      var session = useSession(function (snapshot) { return snapshot })
+      var draft = input && typeof input.draft === 'string' ? input.draft : ''
+      var running = Boolean(session && session.running === true)
+      var sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
+
+      var shownState = React.useState(null)
+      var ghost = shownState[0]
+      var setGhost = shownState[1]
+      var boxState = React.useState(null)
+      var box = boxState[0]
+      var setBox = boxState[1]
+      var root = React.useRef(null)
+      var inflight = React.useRef(null)
+
+      React.useEffect(function () {
+        if (inflight.current) inflight.current.abort()
+        if (!enabled || sessionId === '' || running || draft.trim() !== '') {
+          setGhost(null)
+          return undefined
+        }
+        var timer = window.setTimeout(function () {
+          var abort = new AbortController()
+          inflight.current = abort
+          fetch(new URL(ROUTES.suggest.replace(/^\//, ''), document.baseURI), {
+            method: 'POST',
+            credentials: 'same-origin',
+            signal: abort.signal,
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify({ sessionId: sessionId }),
+          })
+            .then(function (response) { return response.json().catch(function () { return {} }) })
+            .then(function (body) {
+              if (abort.signal.aborted) return
+              if (body && typeof body.suggestion === 'string' && body.suggestion !== '') setGhost({ text: body.suggestion })
+            })
+            .catch(function () {})
+        }, debounceMs)
+        return function () { window.clearTimeout(timer) }
+      }, [enabled, sessionId, running, draft, debounceMs])
+
+      React.useEffect(function () {
+        if (!ghost) { setBox(null); return undefined }
+        function measure() { setBox(caretBox(root.current, ghost)) }
+        measure()
+        var timer = window.setInterval(measure, 400)
+        window.addEventListener('resize', measure)
+        return function () {
+          window.clearInterval(timer)
+          window.removeEventListener('resize', measure)
+        }
+      }, [ghost])
+
+      // 键位只挂一次：用 ref 读当前预测，避免每次都重新绑定。
+      var ghostRef = React.useRef(null)
+      ghostRef.current = ghost
+
+      var accept = function () {
+        var current = ghostRef.current
+        if (!current) return false
+        var actions = props.inputActions
+        if (!actions || typeof actions.insertText !== 'function') return false
+        var span = typeof actions.captureInsertion === 'function' ? actions.captureInsertion() : undefined
+        setGhost(null)
+        return actions.insertText(current.text, span) !== false
+      }
+
+      React.useEffect(function () {
+        if (!enabled) return undefined
+        function onKeyDown(event) {
+          if (event.isComposing || !ghostRef.current) return
+          if ((event.key === 'Tab' || event.key === 'ArrowRight') && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            if (accept()) {
+              event.preventDefault()
+              event.stopPropagation()
+            }
+            return
+          }
+          if (event.key === 'Escape') setGhost(null)
+        }
+        window.addEventListener('keydown', onKeyDown, true)
+        return function () { window.removeEventListener('keydown', onKeyDown, true) }
+      }, [enabled])
+
+      if (!ghost) return null
+      return h('div', {
+        'data-dsh-quota': 'ghost',
+        style: { position: 'absolute', inset: '0', pointerEvents: 'none', overflow: 'hidden' },
+      },
+      box
+        ? h('span', {
+          style: {
+            position: 'absolute',
+            left: box.left + 'px',
+            top: box.top + 'px',
+            font: box.font,
+            lineHeight: box.lineHeight,
+            color: box.color,
+            opacity: 0.4,
+            whiteSpace: 'pre',
+            pointerEvents: 'none',
+            maxWidth: '70%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          },
+        }, ghost.text)
+        : null)
     }
 
     // —— 凭据区 ——
@@ -1129,7 +1303,143 @@ window.__ModuleLoader__.load({
               login: logins[card.id] || card.login,
               notice: notices[card.id],
             })
-          })))
+          })),
+
+        h(PredictSettings, { t: t, predict: data && data.predict, defaultPrompt: data && data.defaultPrompt }),
+      )
+    }
+
+    // —— 输入预测的设置 ——
+    function PredictSettings(props) {
+      var t = props.t
+      var predict = props.predict || {}
+      var editState = React.useState({
+        enabled: predict.enabled === true,
+        provider: predict.provider || '',
+        model: predict.model || '',
+        systemPrompt: predict.systemPrompt || '',
+      })
+      var edit = editState[0]
+      var setEdit = editState[1]
+      var groupsState = React.useState([])
+      var groups = groupsState[0]
+      var setGroups = groupsState[1]
+      var busyState = React.useState('')
+      var busy = busyState[0]
+      var setBusy = busyState[1]
+
+      React.useEffect(function () {
+        setEdit({
+          enabled: predict.enabled === true,
+          provider: predict.provider || '',
+          model: predict.model || '',
+          systemPrompt: predict.systemPrompt || '',
+        })
+      }, [predict.enabled, predict.provider, predict.model, predict.systemPrompt])
+
+      React.useEffect(function () {
+        if (!edit.enabled || groups.length > 0) return undefined
+        var abort = new AbortController()
+        fetch(new URL(ROUTES.models.replace(/^\//, ''), document.baseURI), {
+          credentials: 'same-origin',
+          signal: abort.signal,
+          headers: { accept: 'application/json' },
+        })
+          .then(function (response) { return response.json().catch(function () { return {} }) })
+          .then(function (body) { if (body && Array.isArray(body.groups)) setGroups(body.groups) })
+          .catch(function () {})
+        return function () { abort.abort() }
+      }, [edit.enabled, groups.length])
+
+      function save(patch) {
+        setBusy('save')
+        var body = patch || {
+          enabled: edit.enabled,
+          provider: edit.provider,
+          model: edit.model,
+          systemPrompt: edit.systemPrompt,
+        }
+        fetch(new URL(ROUTES.predict.replace(/^\//, ''), document.baseURI), {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+          .then(function (response) { return response.json().catch(function () { return {} }) })
+          .then(function () { void store.refresh() })
+          .catch(function () {})
+          .finally(function () { setBusy('') })
+      }
+
+      var options = [{ value: '', label: t('predictSession') }]
+      for (var g = 0; g < groups.length; g += 1) {
+        for (var m = 0; m < groups[g].models.length; m += 1) {
+          var model = groups[g].models[m]
+          options.push({ value: groups[g].provider + '|' + model.id, label: groups[g].name + ' · ' + model.name })
+        }
+      }
+      var selected = edit.provider && edit.model ? edit.provider + '|' + edit.model : ''
+      var inputStyle = {
+        height: '30px', borderRadius: '6px', border: '1px solid ' + C.border,
+        background: C.surface, color: C.text, fontSize: '12px', padding: '0 6px',
+      }
+
+      return h('div', { style: { borderTop: '1px solid ' + C.border, paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+          h('strong', { style: { fontSize: '13px', color: C.text } }, t('predictTitle')),
+          h('span', { style: { flex: '1' } }),
+          h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: C.text } },
+            h('input', {
+              type: 'checkbox',
+              checked: edit.enabled,
+              onChange: function (event) {
+                var enabled = Boolean(event.target && event.target.checked)
+                setEdit(Object.assign({}, edit, { enabled: enabled }))
+                save({ enabled: enabled })
+              },
+            }),
+            t('predictEnable'))),
+
+        h('p', { style: { margin: 0, fontSize: '11px', lineHeight: '17px', color: C.minor } }, t('predictHint')),
+
+        edit.enabled
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+            h('label', { style: { fontSize: '11px', color: C.minor } }, t('predictModel')),
+            h('select', {
+              value: selected,
+              style: inputStyle,
+              onChange: function (event) {
+                var parts = String(event.target.value).split('|')
+                var patch = { provider: parts[0] || '', model: parts[1] || '' }
+                setEdit(Object.assign({}, edit, patch))
+                save(patch)
+              },
+            }, options.map(function (option) {
+              return h('option', { key: option.value, value: option.value }, option.label)
+            })),
+            h('label', { style: { fontSize: '11px', color: C.minor } }, t('predictPrompt')),
+            h('textarea', {
+              value: edit.systemPrompt,
+              placeholder: props.defaultPrompt || '',
+              rows: 3,
+              onChange: function (event) {
+                setEdit(Object.assign({}, edit, { systemPrompt: String(event.target && event.target.value) }))
+              },
+              style: {
+                width: '100%', boxSizing: 'border-box', borderRadius: '6px', border: '1px solid ' + C.border,
+                background: C.surface, color: C.text, fontSize: '12px', lineHeight: '18px', padding: '6px 8px',
+                resize: 'vertical', fontFamily: 'inherit',
+              },
+            }),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+              h('button', {
+                type: 'button',
+                style: Object.assign({}, button, busy ? disabledStyle : {}),
+                disabled: Boolean(busy),
+                onClick: function () { save() },
+              }, busy ? t('predictSaved') : t('predictSave')),
+              h('span', { style: { fontSize: '11px', color: C.minor } }, t('predictFee'))))
+          : null)
     }
 
     // —— 注册 ——
@@ -1148,6 +1458,9 @@ window.__ModuleLoader__.load({
       var StripEntry = function (props) {
         return h(QuotaStrip, Object.assign({}, props, { t: t }))
       }
+      var GhostEntry = function (props) {
+        return h(PromptGhost, Object.assign({}, props, { t: t }))
+      }
 
       ctx.effect(function () {
         return ctx.slots.inject('conversation.input.right', function () {
@@ -1163,6 +1476,15 @@ window.__ModuleLoader__.load({
           return ctx.slots.register(
             { name: 'conversation.composer.dock', id: 'quota-strip', order: 60, label: function () { return t('stripTitle') } },
             StripEntry,
+          )
+        })
+      })
+
+      ctx.effect(function () {
+        return ctx.slots.inject('conversation.input.overlay', function () {
+          return ctx.slots.register(
+            { name: 'conversation.input.overlay', id: 'quota-ghost', order: 40 },
+            GhostEntry,
           )
         })
       })

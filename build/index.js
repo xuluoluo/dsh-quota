@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PRICES } from './prices.js'
+import { DEFAULT_PROMPT, createPredictor } from './prediction.js'
 import { PRESETS, probeTarget, readQuota, worstOf } from './providers.js'
 import { createUsageStore, usageFile } from './usage.js'
 import { XAI_OAUTH, accountOf, pollDeviceFlow, startDeviceFlow, usableGrant } from './xai-oauth.js'
@@ -27,6 +28,9 @@ const ROUTES = Object.freeze({
   state: '/quota/state',
   refresh: '/quota/refresh',
   test: '/quota/test',
+  suggest: '/quota/suggest',
+  models: '/quota/models',
+  predict: '/quota/predict',
   key: '/quota/key',
   clear: '/quota/clear',
   providers: '/quota/providers',
@@ -137,7 +141,24 @@ function normalize(config) {
       record: typeof entry.record === 'string' && entry.record !== '' ? entry.record : preset.record,
     })
   }
-  return { enabled, refreshMs, timeoutMs, alertAt, alertCriticalAt, balanceFloor, showChip, prices, providers }
+  return { enabled, refreshMs, timeoutMs, alertAt, alertCriticalAt, balanceFloor, showChip, prices, predict: normalizePredict(pick(config, 'predict', {})), providers }
+}
+
+/** The prediction knobs: off unless asked for, and the model is the session's own by default. */
+function normalizePredict(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {}
+  const text = (value) => (typeof value === 'string' ? value.trim() : '')
+  return {
+    enabled: source.enabled === true,
+    provider: text(source.provider),
+    model: text(source.model),
+    systemPrompt: typeof source.systemPrompt === 'string' ? source.systemPrompt : '',
+    maxTokens: Number.isFinite(Number(source.maxTokens)) ? Math.max(16, Math.min(2048, Number(source.maxTokens))) : 120,
+    maxContextMessages: Number.isFinite(Number(source.maxContextMessages))
+      ? Math.max(2, Math.min(64, Number(source.maxContextMessages)))
+      : 12,
+    debounceMs: Number.isFinite(Number(source.debounceMs)) ? Math.max(200, Math.min(10_000, Number(source.debounceMs))) : 700,
+  }
 }
 
 // ---- diagnostics ---------------------------------------------------------------
@@ -485,6 +506,8 @@ function createService(ctx, settings, signIn, usage) {
         usageFile: usageFile(),
         presets: Object.entries(PRESETS).map(([id, preset]) => ({ id, label: preset.label, auth: preset.auth })),
         showChip: settings.showChip,
+        predict: settings.predict,
+        defaultPrompt: DEFAULT_PROMPT,
       }
       if (!settings.enabled) return { enabled: false, fetchedAt: null, refreshMs: settings.refreshMs, providers: [], ...measured }
       if (force || !fresh(Date.now())) await refresh()
@@ -598,6 +621,7 @@ function targetOf(service, id) {
 }
 
 function registerRoutes(ctx, service, settings, signIn) {
+  const predictor = createPredictor(ctx, () => settings)
   const route = (path, handler) => {
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
@@ -704,6 +728,73 @@ function registerRoutes(ctx, service, settings, signIn) {
       sendJson(res, 200, { ok: true, detail, url: measured?.url })
     } catch (error) {
       sendJson(res, 200, { ok: false, detail: String(error?.message ?? error) })
+    }
+  })
+
+  // —— 输入预测 ——
+  // One suggestion per call: the client asks when the conversation comes to
+  // rest and the composer is empty, and aborts on the next keystroke.
+  route(ROUTES.suggest, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+    if (sessionId === '') return jsonError(res, 400, 'sessionId is required')
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), Math.max(settings.timeoutMs, 15_000))
+    req.on?.('close', () => controller.abort())
+    try {
+      const answer = await predictor.suggest(sessionId, controller.signal)
+      sendJson(res, 200, answer)
+    } catch (error) {
+      const said = error?.name === 'AbortError' ? 'aborted' : String(error?.message ?? error)
+      sendJson(res, 200, { suggestion: null, reason: said })
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+
+  route(ROUTES.models, async (req, res) => {
+    if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const llm = ctx.get('llm')
+    if (!llm) return jsonError(res, 503, 'this composition mounts no llm service')
+    try {
+      const providers = await llm.listProviders()
+      const groups = await Promise.all(providers.map(async (provider) => {
+        try {
+          const models = await llm.listModels(provider.id)
+          return { provider: provider.id, name: provider.name ?? provider.id, models: models.map((model) => ({ id: model.id, name: model.name ?? model.id })) }
+        } catch {
+          return { provider: provider.id, name: provider.name ?? provider.id, models: [] }
+        }
+      }))
+      sendJson(res, 200, { groups })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
+  route(ROUTES.predict, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const patch = {}
+    for (const key of ['provider', 'model', 'systemPrompt']) {
+      if (typeof body[key] === 'string') patch[key] = body[key].trim()
+    }
+    if (typeof body.enabled === 'boolean') patch.enabled = body.enabled
+    for (const key of ['maxTokens', 'maxContextMessages', 'debounceMs']) {
+      if (Number.isFinite(Number(body[key]))) patch[key] = Number(body[key])
+    }
+    try {
+      const next = await editConfig(ctx, (current) => ({
+        ...current,
+        predict: { ...(current.predict && typeof current.predict === 'object' ? current.predict : {}), ...patch },
+      }))
+      sendJson(res, 200, { ok: true, predict: normalizePredict(next.predict) })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
     }
   })
 
@@ -837,6 +928,24 @@ async function editProviders(ctx, mutate) {
       : defaultProviderRows()
     next = mutate(rows)
     return { ...base, providers: next }
+  })
+  return next
+}
+
+/**
+ * Write into the dsh-quota row itself. The provider list has its own helper
+ * (`editProviders`) because it has to seed the defaults; everything else — the
+ * prediction settings — lands here.
+ */
+async function editConfig(ctx, mutate) {
+  const found = configRow(ctx)
+  if (!found) {
+    throw new Error('this profile does not keep the dsh-quota row in its own patch layer, so the page cannot rewrite these settings')
+  }
+  let next
+  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+    next = mutate({ ...inherited, ...current })
+    return next
   })
   return next
 }
