@@ -426,7 +426,7 @@ window.__ModuleLoader__.load({
 
     // —— 小组件 ——
     var barTrack = {
-      position: 'relative', flex: '1', height: '6px', borderRadius: '999px',
+      position: 'relative', flex: '1', height: '7px', borderRadius: '999px',
       background: C.surface2, overflow: 'hidden', minWidth: '60px',
     }
 
@@ -441,13 +441,15 @@ window.__ModuleLoader__.load({
         }))
     }
 
+    // 数字统一等宽，表格才对齐得起来
+    var num = { fontVariantNumeric: 'tabular-nums' }
     var button = {
-      border: '1px solid ' + C.borderStrong, background: 'transparent', color: C.text,
-      borderRadius: '8px', padding: '4px 10px', fontSize: '12px', lineHeight: '18px',
+      border: '1px solid ' + C.borderStrong, background: C.surface, color: C.text,
+      borderRadius: '8px', padding: '5px 12px', fontSize: '12px', lineHeight: '18px',
       cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit',
     }
-    var buttonPrimary = Object.assign({}, button, { borderColor: C.brand, color: C.brand })
-    var buttonQuiet = Object.assign({}, button, { borderColor: 'transparent', color: C.minor, padding: '2px 6px' })
+    var buttonPrimary = Object.assign({}, button, { borderColor: C.brand, color: C.brand, background: C.surface2, fontWeight: '500' })
+    var buttonQuiet = Object.assign({}, button, { borderColor: 'transparent', background: 'transparent', color: C.minor, padding: '2px 6px' })
     var disabledStyle = { opacity: 0.55, cursor: 'default' }
     var dotBase = {
       width: '6px', height: '6px', borderRadius: '50%', flex: 'none', display: 'inline-block',
@@ -542,7 +544,7 @@ window.__ModuleLoader__.load({
         },
         h('span', { style: Object.assign({}, dotBase, { background: colorOf(tone) }) }),
         h('span', null, card.label),
-        h('span', { style: { color: card.alert || card.error ? colorOf(tone) : C.text } }, (card.alert ? '⚠ ' : '') + value))
+        h('span', { style: Object.assign({ color: card.alert || card.error ? colorOf(tone) : C.text, fontWeight: card.alert ? '600' : '400' }, num) }, (card.alert ? '⚠ ' : '') + value))
       }),
       cost ? h('span', { style: { marginLeft: 'auto' } }, t('todayCost') + ' ≈' + cost) : null)
     }
@@ -820,13 +822,18 @@ window.__ModuleLoader__.load({
 
       return h('div', {
         style: {
-          border: '1px solid ' + C.border, background: C.surface, borderRadius: '12px',
-          padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px',
+          border: '1px solid ' + C.border, background: C.surface, borderRadius: '14px',
+          padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px',
         },
       },
       h('div', { title: cardTooltip(t, card), style: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' } },
-        h('span', { style: { fontSize: '14px', fontWeight: '500', color: C.text } }, card.label),
-        h('span', { style: { fontSize: '11px', color: C.minor } }, card.id),
+        h('span', { style: { fontSize: '13.5px', fontWeight: '600', color: C.text, letterSpacing: '-.01em' } }, card.label),
+        h('span', {
+          style: {
+            fontSize: '10px', color: C.minor, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            background: C.surface2, borderRadius: '4px', padding: '1px 5px',
+          },
+        }, card.id),
         card.plan
           ? h('span', { style: { fontSize: '11px', color: C.brand, border: '1px solid ' + C.brand, borderRadius: '999px', padding: '0 6px' } }, t('plan') + ' · ' + card.plan)
           : null,
@@ -848,10 +855,10 @@ window.__ModuleLoader__.load({
           windows.map(function (win) {
             var used = percentOf(win.used)
             return h('div', { key: win.key, style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-              h('span', { style: { fontSize: '12px', color: C.minor, width: '76px', flex: 'none' } }, windowLabel(t, win.key)),
+              h('span', { style: { fontSize: '12px', color: C.minor, width: '88px', flex: 'none' } }, windowLabel(t, win.key)),
               h(Bar, { used: used }),
-              h('span', { style: { fontSize: '12px', color: C.text, width: '44px', textAlign: 'right', flex: 'none' } }, used + '%'),
-              h('span', { style: { fontSize: '11px', color: C.minor, minWidth: '96px', textAlign: 'right', flex: 'none' } },
+              h('span', { style: Object.assign({ fontSize: '12px', color: C.text, width: '46px', textAlign: 'right', flex: 'none' }, num) }, used + '%'),
+              h('span', { style: Object.assign({ fontSize: '11px', color: C.minor, minWidth: '104px', textAlign: 'right', flex: 'none' }, num) },
                 win.display || (win.resetsAt ? t('resetsIn') + relativeReset(win.resetsAt, t) : '')))
           }))
         : null,
@@ -928,15 +935,15 @@ window.__ModuleLoader__.load({
       return total > 0 ? Math.round((cached / total) * 100) : 0
     }
 
-    var tile = { display: 'flex', flexDirection: 'column', gap: '2px', padding: '10px 14px', minWidth: '0' }
+    var tile = { display: 'flex', flexDirection: 'column', gap: '3px', padding: '12px 16px', minWidth: '0' }
 
     function UsageTile(props) {
       return h('div', {
         style: Object.assign({}, tile, { borderLeft: props.first ? 'none' : '1px solid ' + C.border }),
       },
-      h('div', { style: { fontSize: '19px', lineHeight: '24px', color: C.text, fontWeight: '500' } }, props.value),
-      h('div', { style: { fontSize: '10px', letterSpacing: '.06em', color: C.minor, textTransform: 'uppercase' } }, props.label),
-      props.note ? h('div', { style: { fontSize: '11px', color: C.minor } }, props.note) : null)
+      h('div', { style: Object.assign({ fontSize: '22px', lineHeight: '26px', color: C.text, fontWeight: '600', letterSpacing: '-.01em' }, num) }, props.value),
+      h('div', { style: { fontSize: '10px', letterSpacing: '.08em', color: C.minor, textTransform: 'uppercase' } }, props.label),
+      props.note ? h('div', { style: { fontSize: '11px', color: C.minor, lineHeight: '15px' } }, props.note) : null)
     }
 
     function UsageSection(props) {
@@ -952,7 +959,7 @@ window.__ModuleLoader__.load({
 
       return h('section', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
         h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' } },
-          h('h3', { style: { margin: 0, fontSize: '13px', fontWeight: '500', color: C.text } }, t('usageTitle')),
+          h('h3', { style: { margin: 0, fontSize: '13px', fontWeight: '600', color: C.text, letterSpacing: '-.01em' } }, t('usageTitle')),
           h('span', { style: { fontSize: '11px', color: C.minor } }, t('usageRange')),
           h('span', { style: { flex: '1' } }),
           h('span', { style: { fontSize: '11px', color: C.minor } }, t('uFrom'))),
@@ -974,7 +981,7 @@ window.__ModuleLoader__.load({
         h(UsageTile, { value: compact(week.calls), label: t('uCalls'), note: t('uToday') + ' ' + compact(usage.today && usage.today.calls) })),
 
         peak > 0
-          ? h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '4px', height: '34px', padding: '0 2px' } },
+          ? h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '4px', height: '34px', padding: '0 2px', borderBottom: '1px solid ' + C.border } },
             (usage.days || []).map(function (day) {
               var value = (day.input || 0) + (day.output || 0)
               var height = Math.max(2, Math.round((value / peak) * 34))
@@ -982,8 +989,9 @@ window.__ModuleLoader__.load({
                 key: day.date,
                 title: day.date + ' · ' + compact(value) + ' · ' + compact(day.calls),
                 style: {
-                  flex: '1', height: height + 'px', borderRadius: '2px 2px 0 0',
+                  flex: '1', height: height + 'px', borderRadius: '3px 3px 0 0',
                   background: value > 0 ? C.brand : C.surface2,
+                  opacity: value > 0 ? (day.date === (usage.days[usage.days.length - 1] || {}).date ? 0.55 : 0.22) : 1,
                 },
               })
             }))
@@ -1002,11 +1010,11 @@ window.__ModuleLoader__.load({
                 style: { fontSize: '12px', color: C.text, minWidth: '140px', flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
               }, line.model),
               h('span', { style: { fontSize: '11px', color: C.minor, width: '84px', flex: 'none' } }, line.provider),
-              h('div', { style: { flex: '1', height: '4px', borderRadius: '999px', background: C.surface2, overflow: 'hidden', minWidth: '40px' } },
+              h('div', { style: { flex: '1', height: '5px', borderRadius: '999px', background: C.surface2, overflow: 'hidden', minWidth: '40px' } },
                 h('div', {
                   style: {
                     width: (biggest > 0 ? Math.round((total / biggest) * 100) : 0) + '%',
-                    height: '4px', background: C.brand, borderRadius: '999px',
+                    height: '5px', background: C.brand, borderRadius: '999px', opacity: 0.35,
                   },
                 })),
               h('span', { style: { fontSize: '11px', color: C.minor, minWidth: '148px', textAlign: 'right', flex: 'none' } },
@@ -1073,8 +1081,8 @@ window.__ModuleLoader__.load({
 
       return h('section', {
         style: {
-          border: '1px solid ' + C.border, background: C.surface, borderRadius: '12px',
-          padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px',
+          border: '1px solid ' + C.border, background: C.surface, borderRadius: '14px',
+          padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px',
         },
       },
       h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px' } },
@@ -1256,7 +1264,7 @@ window.__ModuleLoader__.load({
 
       return h('section', { style: { display: 'flex', flexDirection: 'column', gap: '14px', maxWidth: '760px' } },
         h('header', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-          h('h2', { style: { margin: 0, fontSize: '16px', fontWeight: '500', color: C.text } }, t('title')),
+          h('h2', { style: { margin: 0, fontSize: '16px', fontWeight: '600', color: C.text, letterSpacing: '-.015em' } }, t('title')),
           h('span', { style: { flex: '1' } }),
           data && data.fetchedAt
             ? h('span', { style: { fontSize: '11px', color: C.minor } }, t('updated') + formatTime(data.fetchedAt))
@@ -1268,7 +1276,7 @@ window.__ModuleLoader__.load({
             onClick: function () { void store.refresh() },
           }, busy ? t('refreshing') : t('refresh'))),
 
-        h('p', { style: { margin: 0, fontSize: '12px', lineHeight: '19px', color: C.minor } }, t('intro')),
+        h('p', { style: { margin: 0, fontSize: '12px', lineHeight: '19px', color: C.minor, maxWidth: '62ch' } }, t('intro')),
 
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
           h('button', {
@@ -1304,7 +1312,7 @@ window.__ModuleLoader__.load({
           ? h('p', { style: { margin: 0, fontSize: '12px', color: C.minor } }, t('empty'))
           : null,
 
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
           cards.map(function (card) {
             return h(Card, {
               key: card.id,
@@ -1406,7 +1414,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: { borderTop: '1px solid ' + C.border, paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-          h('strong', { style: { fontSize: '13px', color: C.text } }, t('predictTitle')),
+          h('strong', { style: { fontSize: '13px', fontWeight: '600', color: C.text, letterSpacing: '-.01em' } }, t('predictTitle')),
           h('span', { style: { flex: '1' } }),
           h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: C.text } },
             h('input', {
