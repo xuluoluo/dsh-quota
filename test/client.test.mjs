@@ -342,6 +342,9 @@ check('用量：四个数字都在', ['50.9K', '93.2K', '2.3K', '4'].every((valu
 check('用量：输入输出写在 TOKEN 下', pageTexts.join('').includes('输入 47.3K · 输出 3.6K'))
 check('用量：缓存命中率', pageTexts.join('').includes('命中率 66%'))
 check('用量：按模型分行', pageTexts.includes('deepseek-v4.1-flash') && pageTexts.join('').includes('命中率 74%'))
+const dayLabels = elements(mini.tree).filter((node) => node.type === 'div' && /^(日|一|二|三|四|五|六)$/.test(textsOf(node).join('')))
+check('七天条带下面是七个星期标签', dayLabels.length === 7, String(dayLabels.length))
+check('柱状图有峰值说明', pageTexts.join('').includes('峰值'))
 check('用量：七天条带七根柱子',
   elements(mini.tree).filter((node) => /^\d{4}-\d{2}-\d{2} · /.test(String(node.props?.title ?? ''))).length === 7)
 pageTexts = await openTab('输入预测')

@@ -131,6 +131,9 @@ window.__ModuleLoader__.load({
       tabPredict: '输入预测',
       promptReset: '恢复默认',
       promptDefaultHint: '留空就用内置的那份（下面显示的就是它）。',
+      uDays: '近 7 天（柱高 = 当天 token）',
+      uPeak: '峰值',
+      weekdays: '日,一,二,三,四,五,六',
       predictTitle: '输入预测',
       predictHint: '每轮回答结束后，在空输入框里用灰字提示你的下一句。按 Tab 或 → 填入，不会自动发送。',
       predictEnable: '启用输入预测',
@@ -241,6 +244,9 @@ window.__ModuleLoader__.load({
       tabPredict: 'Prediction',
       promptReset: 'Use default',
       promptDefaultHint: 'Leave it empty to use the built-in prompt (shown below).',
+      uDays: 'last 7 days (bar height = tokens)',
+      uPeak: 'peak',
+      weekdays: 'S,M,T,W,T,F,S',
       predictTitle: 'Input prediction',
       predictHint: 'After each reply, a gray prediction of your next message appears in the empty composer. Tab or → fills it in; it never sends.',
       predictEnable: 'Enable input prediction',
@@ -410,6 +416,14 @@ window.__ModuleLoader__.load({
         return store.subscribe(function (next) { pair[1](next) })
       }, [])
       return pair[0]
+    }
+
+    /** 柱状图下面那一排星期：日期按本地时区解释，别用 UTC 跨天。 */
+    function weekdayOf(t, date) {
+      var at = Date.parse(date + 'T00:00:00')
+      if (isNaN(at)) return ''
+      var list = String(t('weekdays') || '').split(',')
+      return list[new Date(at).getDay()] || ''
     }
 
     function formatTime(iso) {
@@ -991,20 +1005,38 @@ window.__ModuleLoader__.load({
         h(UsageTile, { value: compact(week.calls), label: t('uCalls'), note: t('uToday') + ' ' + compact(usage.today && usage.today.calls) })),
 
         peak > 0
-          ? h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '4px', height: '34px', padding: '0 2px', borderBottom: '1px solid ' + C.border } },
-            (usage.days || []).map(function (day) {
-              var value = (day.input || 0) + (day.output || 0)
-              var height = Math.max(2, Math.round((value / peak) * 34))
-              return h('div', {
-                key: day.date,
-                title: day.date + ' · ' + compact(value) + ' · ' + compact(day.calls),
-                style: {
-                  flex: '1', height: height + 'px', borderRadius: '3px 3px 0 0',
-                  background: value > 0 ? C.brand : C.surface2,
-                  opacity: value > 0 ? (day.date === (usage.days[usage.days.length - 1] || {}).date ? 0.55 : 0.22) : 1,
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+            h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px' } },
+              h('span', { style: { fontSize: '11px', color: C.minor } }, t('uDays')),
+              h('span', { style: { flex: '1' } }),
+              h('span', { style: Object.assign({ fontSize: '11px', color: C.minor }, num) }, t('uPeak') + ' ' + compact(peak))),
+            h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '4px', height: '40px', borderBottom: '1px solid ' + C.border } },
+              (usage.days || []).map(function (day, index) {
+                var value = (day.input || 0) + (day.output || 0)
+                var today = index === usage.days.length - 1
+                var height = value > 0 ? Math.max(4, Math.round((value / peak) * 40)) : 0
+                return h('div', {
+                  key: day.date,
+                  title: day.date + ' · ' + compact(value) + ' · ' + compact(day.calls),
+                  style: { flex: '1', display: 'flex', justifyContent: 'center', alignItems: 'flex-end' },
                 },
-              })
-            }))
+                h('div', {
+                  style: {
+                    width: '100%', maxWidth: '34px', height: height > 0 ? height + 'px' : '2px',
+                    borderRadius: '3px 3px 0 0',
+                    background: value > 0 ? C.brand : C.border,
+                    opacity: value > 0 ? (today ? 0.6 : 0.25) : 1,
+                  },
+                }))
+              })),
+            h('div', { style: { display: 'flex', gap: '4px' } },
+              (usage.days || []).map(function (day, index) {
+                var today = index === usage.days.length - 1
+                return h('div', {
+                  key: day.date,
+                  style: { flex: '1', textAlign: 'center', fontSize: '10px', color: today ? C.text : C.minor, fontWeight: today ? '600' : '400' },
+                }, weekdayOf(t, day.date))
+              })))
           : null,
 
         (usage.models || []).length > 0
