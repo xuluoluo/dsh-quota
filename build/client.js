@@ -126,6 +126,11 @@ window.__ModuleLoader__.load({
       costEstimate: '按目录价估算',
       todayCost: '今日',
       stripTitle: '额度与今日花费（点一下刷新）',
+      tabQuota: '额度',
+      tabUsage: '用量',
+      tabPredict: '输入预测',
+      promptReset: '恢复默认',
+      promptDefaultHint: '留空就用内置的那份（下面显示的就是它）。',
       predictTitle: '输入预测',
       predictHint: '每轮回答结束后，在空输入框里用灰字提示你的下一句。按 Tab 或 → 填入，不会自动发送。',
       predictEnable: '启用输入预测',
@@ -231,6 +236,11 @@ window.__ModuleLoader__.load({
       costEstimate: 'estimate from list prices',
       todayCost: 'today',
       stripTitle: 'Allowance and today cost (click to refresh)',
+      tabQuota: 'Allowance',
+      tabUsage: 'Usage',
+      tabPredict: 'Prediction',
+      promptReset: 'Use default',
+      promptDefaultHint: 'Leave it empty to use the built-in prompt (shown below).',
       predictTitle: 'Input prediction',
       predictHint: 'After each reply, a gray prediction of your next message appears in the empty composer. Tab or → fills it in; it never sends.',
       predictEnable: 'Enable input prediction',
@@ -1141,6 +1151,9 @@ window.__ModuleLoader__.load({
       var data = state.data
       var cards = data ? data.providers : []
       var busy = state.status === 'refreshing'
+      var tabState = React.useState('quota')
+      var tab = tabState[0]
+      var setTab = tabState[1]
 
       var draftsState = React.useState({})
       var drafts = draftsState[0]
@@ -1278,63 +1291,105 @@ window.__ModuleLoader__.load({
 
         h('p', { style: { margin: 0, fontSize: '12px', lineHeight: '19px', color: C.minor, maxWidth: '62ch' } }, t('intro')),
 
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-          h('button', {
-            type: 'button',
-            style: Object.assign({}, buttonPrimary, adding ? { borderColor: C.borderStrong, color: C.minor } : {}),
-            onClick: function () { setAdding(!adding) },
-          }, adding ? t('cancel') : '+ ' + t('addTitle')),
-          h('span', { style: { flex: '1' } }),
-          h('span', { style: { fontSize: '11px', color: C.minor } },
-            cards.length + ' ' + t('providersUnit'))),
+        h(Tabs, {
+          tab: tab,
+          onTab: setTab,
+          items: [
+            { id: 'quota', label: t('tabQuota') },
+            { id: 'usage', label: t('tabUsage') },
+            { id: 'predict', label: t('tabPredict') },
+          ],
+        }),
 
-        adding
-          ? h(AddProvider, {
-            t: t,
-            presets: data && data.presets,
-            onChanged: function () { void store.refresh() },
-            onClose: function () { setAdding(false) },
-          })
+        tab === 'quota'
+          ? [
+            h('div', { key: 'bar', style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+              h('button', {
+                type: 'button',
+                style: Object.assign({}, buttonPrimary, adding ? { borderColor: C.borderStrong, color: C.minor } : {}),
+                onClick: function () { setAdding(!adding) },
+              }, adding ? t('cancel') : '+ ' + t('addTitle')),
+              h('span', { style: { flex: '1' } }),
+              h('span', { style: { fontSize: '11px', color: C.minor } },
+                cards.length + ' ' + t('providersUnit'))),
+
+            adding
+              ? h(AddProvider, {
+                key: 'add',
+                t: t,
+                presets: data && data.presets,
+                onChanged: function () { void store.refresh() },
+                onClose: function () { setAdding(false) },
+              })
+              : null,
+
+            state.error
+              ? h('p', { key: 'error', style: { margin: 0, fontSize: '12px', color: C.error } },
+                state.error + (state.data ? ' · ' + t('stale') : ''))
+              : null,
+
+            data && data.enabled === false
+              ? h('p', { key: 'off', style: { margin: 0, fontSize: '12px', color: C.minor } }, t('disabled'))
+              : null,
+
+            data && data.enabled !== false && cards.length === 0
+              ? h('p', { key: 'empty', style: { margin: 0, fontSize: '12px', color: C.minor } }, t('empty'))
+              : null,
+
+            h('div', { key: 'cards', style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
+              cards.map(function (card) {
+                return h(Card, {
+                  key: card.id,
+                  t: t,
+                  card: card,
+                  busy: working === card.id,
+                  draft: drafts[card.id] || '',
+                  onDraft: function (value) { setDraft(card.id, value) },
+                  onSave: function () { onSave(card) },
+                  onClear: function () { onClear(card) },
+                  onTest: function () { onTest(card) },
+                  onSignIn: function () { onSignIn(card) },
+                  onSignOut: function () { onSignOut(card) },
+                  onCancelLogin: function () { onCancelLogin(card) },
+                  onRemove: function () { onRemove(card) },
+                  login: logins[card.id] || card.login,
+                  notice: notices[card.id],
+                })
+              })),
+          ]
           : null,
 
-        h(UsageSection, { t: t, usage: data && data.usage }),
+        tab === 'usage' ? h(UsageSection, { t: t, usage: data && data.usage }) : null,
 
-        state.error
-          ? h('p', { style: { margin: 0, fontSize: '12px', color: C.error } },
-            state.error + (state.data ? ' · ' + t('stale') : ''))
+        tab === 'predict'
+          ? h(PredictSettings, { t: t, predict: data && data.predict, defaultPrompt: data && data.defaultPrompt })
           : null,
-
-        data && data.enabled === false
-          ? h('p', { style: { margin: 0, fontSize: '12px', color: C.minor } }, t('disabled'))
-          : null,
-
-        data && data.enabled !== false && cards.length === 0
-          ? h('p', { style: { margin: 0, fontSize: '12px', color: C.minor } }, t('empty'))
-          : null,
-
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
-          cards.map(function (card) {
-            return h(Card, {
-              key: card.id,
-              t: t,
-              card: card,
-              busy: working === card.id,
-              draft: drafts[card.id] || '',
-              onDraft: function (value) { setDraft(card.id, value) },
-              onSave: function () { onSave(card) },
-              onClear: function () { onClear(card) },
-              onTest: function () { onTest(card) },
-              onSignIn: function () { onSignIn(card) },
-              onSignOut: function () { onSignOut(card) },
-              onCancelLogin: function () { onCancelLogin(card) },
-              onRemove: function () { onRemove(card) },
-              login: logins[card.id] || card.login,
-              notice: notices[card.id],
-            })
-          })),
-
-        h(PredictSettings, { t: t, predict: data && data.predict, defaultPrompt: data && data.defaultPrompt }),
       )
+    }
+
+    // —— 分栏：额度 / 用量 / 输入预测 ——
+    function Tabs(props) {
+      return h('div', {
+        style: {
+          display: 'inline-flex', gap: '2px', padding: '3px', borderRadius: '10px',
+          background: C.surface2, border: '1px solid ' + C.border, alignSelf: 'flex-start',
+        },
+      },
+      props.items.map(function (item) {
+        var active = props.tab === item.id
+        return h('button', {
+          key: item.id,
+          type: 'button',
+          onClick: function () { props.onTab(item.id) },
+          style: {
+            border: 'none', borderRadius: '7px', padding: '5px 14px', fontSize: '12px',
+            cursor: 'pointer', fontFamily: 'inherit', fontWeight: active ? '600' : '400',
+            background: active ? C.surface : 'transparent',
+            color: active ? C.text : C.minor,
+            boxShadow: active ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
+          },
+        }, item.label)
+      }))
     }
 
     // —— 输入预测的设置 ——
@@ -1445,11 +1500,22 @@ window.__ModuleLoader__.load({
             }, options.map(function (option) {
               return h('option', { key: option.value, value: option.value }, option.label)
             })),
-            h('label', { style: { fontSize: '11px', color: C.minor } }, t('predictPrompt')),
+            h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px' } },
+              h('label', { style: { fontSize: '11px', color: C.minor } }, t('predictPrompt')),
+              h('span', { style: { flex: '1' } }),
+              h('button', {
+                type: 'button',
+                style: buttonQuiet,
+                onClick: function () {
+                  setEdit(Object.assign({}, edit, { systemPrompt: '' }))
+                  save({ systemPrompt: '' })
+                },
+              }, t('promptReset'))),
+            h('div', { style: { fontSize: '11px', color: C.minor } }, t('promptDefaultHint')),
             h('textarea', {
-              value: edit.systemPrompt,
-              placeholder: props.defaultPrompt || '',
-              rows: 3,
+              // 空字符串表示「用内置的」：这里直接把内置那份显示出来，省得看不见。
+              value: edit.systemPrompt === '' ? (props.defaultPrompt || '') : edit.systemPrompt,
+              rows: 5,
               onChange: function (event) {
                 setEdit(Object.assign({}, edit, { systemPrompt: String(event.target && event.target.value) }))
               },

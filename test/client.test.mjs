@@ -181,6 +181,8 @@ const payload = {
   usage: usageView,
   usageFile: 'C:/Users/x/.dsh/.quota-usage.json',
   showChip: true,
+  predict: { enabled: true, provider: '', model: '', systemPrompt: '', debounceMs: 700 },
+  defaultPrompt: '你是一个输入预测器。只输出这一句话本身。',
   presets: [
     { id: 'opencode-go', label: 'OpenCode Go', auth: 'key' },
     { id: 'xai-billing', label: 'Grok', auth: 'oauth' },
@@ -319,6 +321,21 @@ check('DeepSeek 余额卡：金额 + 构成', pageTexts.join('').includes('余�
 check('没有额度接口的卡（百炼）说明自己的职责', pageTexts.join('').includes('这家没有公开的额度接口'), JSON.stringify(pageTexts.slice(-12)))
 check('Grok 的产品分项有渲染', pageTexts.includes('GrokBuild 92%'))
 
+// —— 分栏：额度 / 用量 / 输入预测 ——
+check('三栏都在', ['额度', '用量', '输入预测'].every((label) => pageTexts.includes(label)), JSON.stringify(pageTexts.slice(0, 8)))
+check('默认停在额度栏（用量不在首屏）', !pageTexts.includes('缓存读取'))
+
+async function openTab(label) {
+  const button = elements(mini.tree).find((node) => node.type === 'button' && textsOf(node).join('') === label)
+  if (!button) throw new Error(`no tab button: ${label}`)
+  await button.props.onClick()
+  await tick()
+  return textsOf(mini.tree)
+}
+
+pageTexts = await openTab('用量')
+check('切到用量栏才看得到用量', pageTexts.includes('缓存读取'))
+
 // —— 用量 ——
 check('用量：四个数字都在', ['50.9K', '93.2K', '2.3K', '4'].every((value) => pageTexts.includes(value)),
   JSON.stringify(pageTexts.slice(0, 40)))
@@ -327,6 +344,15 @@ check('用量：缓存命中率', pageTexts.join('').includes('命中率 66%'))
 check('用量：按模型分行', pageTexts.includes('deepseek-v4.1-flash') && pageTexts.join('').includes('命中率 74%'))
 check('用量：七天条带七根柱子',
   elements(mini.tree).filter((node) => /^\d{4}-\d{2}-\d{2} · /.test(String(node.props?.title ?? ''))).length === 7)
+pageTexts = await openTab('输入预测')
+const promptBox = elements(mini.tree).find((node) => node.type === 'textarea')
+check('提示词框预填了内置那份', Boolean(promptBox) && String(promptBox.props.value).includes('输入预测器'),
+  promptBox ? String(promptBox.props.value).slice(0, 40) : 'no textarea')
+check('提示词有「恢复默认」', pageTexts.includes('恢复默认'))
+const predictToggle = elements(mini.tree).find((node) => node.type === 'input' && node.props.type === 'checkbox')
+check('预测开关是勾上的', Boolean(predictToggle) && predictToggle.props.checked === true)
+
+pageTexts = await openTab('额度')
 check('每个 provider 都有移除按钮',
   elements(mini.tree).filter((node) => node.type === 'button' && textsOf(node).join('') === '移除').length === 5)
 
@@ -372,8 +398,10 @@ check('添加成功后表单收起',
   !elements(mini.tree).some((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id')))
 
 // —— 成本、告警、测试连接 ——
-check('用量区给出估算花费', pageTexts.join('').includes('≈') && pageTexts.join('').includes('.17'), JSON.stringify(pageTexts.slice(0, 20)))
+pageTexts = await openTab('用量')
+check('用量区给出估算花费', pageTexts.join('').includes('≈') && pageTexts.join('').includes('$3.17'), JSON.stringify(pageTexts.slice(0, 20)))
 check('模型行也带花费', pageTexts.join('').includes('.013'))
+pageTexts = await openTab('额度')
 check('超过阈值时卡头挂告警', pageTexts.join('').includes('已达上限') && pageTexts.join('').includes('接近上限'))
 
 const testButton = findByText(mini.tree, '测试')
