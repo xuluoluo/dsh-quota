@@ -76,8 +76,9 @@ window.__ModuleLoader__.load({
       cancel: '取消',
       intro: '每个数字都来自厂商自己的接口：OpenCode Go 的滚动 / 每周 / 每月三个窗口，Grok 订阅的本期额度，Command Code 的 5 小时 / 每周窗口加当月 credits。密钥只写进 DSH 凭据库，插件不留副本；Grok 登录写的就是 DSH 自己那条凭据记录，所以这里登录完，DSH 里也能直接用 Grok。',
       win_rolling: '滚动窗口',
-      win_weekly: '每周',
-      win_monthly: '每月',
+      win_fiveHour: '5 小时',
+      win_weekly: '一周',
+      win_monthly: '一个月',
       win_hourly: '每小时',
       win_daily: '每日',
       win_seasonal: '季度',
@@ -181,9 +182,10 @@ window.__ModuleLoader__.load({
       orEnterCode: 'or enter this code by hand',
       cancel: 'Cancel',
       intro: 'Every number comes from the vendor\'s own endpoint: the OpenCode Go rolling, weekly and monthly windows, the Grok subscription period, and Command Code\'s five-hour and weekly windows plus the month\'s credits. Keys are written to the DSH credential store only; this plugin keeps no copy. Grok\'s sign-in writes the credential record DSH itself reads, so approving here also makes Grok usable in DSH.',
-      win_rolling: 'Rolling',
-      win_weekly: 'Weekly',
-      win_monthly: 'Monthly',
+      win_rolling: 'rolling',
+      win_fiveHour: '5-hour',
+      win_weekly: 'week',
+      win_monthly: 'month',
       win_hourly: 'Hourly',
       win_daily: 'Daily',
       win_seasonal: 'Seasonal',
@@ -271,6 +273,7 @@ window.__ModuleLoader__.load({
 
     var WINDOW_KEYS = {
       rolling: 'win_rolling',
+      'five-hour': 'win_fiveHour',
       weekly: 'win_weekly',
       monthly: 'win_monthly',
       hourly: 'win_hourly',
@@ -491,7 +494,7 @@ window.__ModuleLoader__.load({
         var value = card.error ? '!' : worst ? percentOf(worst.used) + '%' : (card.balance || t('never'))
         return h('span', {
           key: card.id,
-          title: card.label + (detail ? '\n' + detail : ''),
+          title: cardTooltip(t, card),
           style: {
             display: 'inline-flex', alignItems: 'center', gap: '5px',
             padding: '1px 7px', borderRadius: '999px', border: '1px solid ' + C.border,
@@ -534,7 +537,7 @@ window.__ModuleLoader__.load({
         var value = card.error ? '!' : worst ? percentOf(worst.used) + '%' : (card.balance || t('never'))
         return h('span', {
           key: card.id,
-          title: card.label + (card.alert ? ' · ' + (card.alert === 'critical' ? t('alertCritical') : t('alertWarn')) : ''),
+          title: cardTooltip(t, card),
           style: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
         },
         h('span', { style: Object.assign({}, dotBase, { background: colorOf(tone) }) }),
@@ -544,6 +547,23 @@ window.__ModuleLoader__.load({
       cost ? h('span', { style: { marginLeft: 'auto' } }, t('todayCost') + ' ≈' + cost) : null)
     }
 
+    /** 悬停时看的全量额度：每家每个窗口一行，带剩余与重置倒计时。 */
+    function cardTooltip(t, card) {
+      var lines = [card.label]
+      var windows = Array.isArray(card.windows) ? card.windows : []
+      windows.forEach(function (win) {
+        var used = percentOf(win.used)
+        var reset = win.resetsAt ? relativeReset(win.resetsAt, t) : ''
+        var tail = win.display || (reset === '' ? '' : reset === t('resetSoon') ? reset : t('resetsIn') + reset)
+        lines.push(windowLabel(t, win.key) + ' · ' + used + '%' + (tail ? ' · ' + tail : ''))
+      })
+      if (card.plan) lines.push(t('plan') + ' · ' + card.plan)
+      if (card.balance) lines.push(t('balance') + ' · ' + card.balance)
+      if (card.note) lines.push(card.note)
+      if (card.error) lines.push(card.error)
+      if (card.quota === false) lines.push(t('noQuota'))
+      return lines.join('\n')
+    }
     // —— 输入预测：空输入框里的灰字 ——
     /**
      * 灰字贴在光标后面。位置来自选区：容器（这个 overlay 槽）通常在 composer
@@ -804,7 +824,7 @@ window.__ModuleLoader__.load({
           padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px',
         },
       },
-      h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' } },
+      h('div', { title: cardTooltip(t, card), style: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' } },
         h('span', { style: { fontSize: '14px', fontWeight: '500', color: C.text } }, card.label),
         h('span', { style: { fontSize: '11px', color: C.minor } }, card.id),
         card.plan

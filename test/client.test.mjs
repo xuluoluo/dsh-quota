@@ -309,9 +309,9 @@ await tick()
 let pageTexts = textsOf(mini.tree)
 check('页面标题与刷新按钮', pageTexts.includes('额度') && pageTexts.includes('刷新'))
 check('三个窗口名都本地化了',
-  pageTexts.includes('滚动窗口') && pageTexts.includes('每周') && pageTexts.includes('每月'),
+  pageTexts.includes('滚动窗口') && pageTexts.includes('一周') && pageTexts.includes('一个月'),
   JSON.stringify(pageTexts.slice(0, 30)))
-check('Command Code 的 5 小时与当月额度也认得',
+check('Command Code 的当月额度也认得',
   pageTexts.includes('5 小时') && pageTexts.includes('当月额度'))
 check('套餐与到期写在卡头', pageTexts.join('').includes('套餐 · GOAT') && pageTexts.join('').includes('到期于'))
 check('credits 窗口显示金额而不是百分比', pageTexts.includes('$64.78 / $70.00'))
@@ -391,6 +391,19 @@ const stripTexts = textsOf(mini.tree)
 check('窄条显示每家与百分比', stripTexts.includes('OpenCode Go') && stripTexts.some((text) => text.includes('100%')), JSON.stringify(stripTexts))
 check('窄条显示今日花费', stripTexts.join('').includes('今日 ≈$0.42'), JSON.stringify(stripTexts))
 check('窄条对告警加 ⚠', stripTexts.some((text) => text.indexOf('⚠') === 0), JSON.stringify(stripTexts))
+
+const ocPill = elements(mini.tree).find((node) => node.type === 'span' && String(node.props?.title ?? '').startsWith('OpenCode Go'))
+const ocTip = ocPill ? String(ocPill.props.title) : ''
+check('悬停给出全部窗口（5 小时 / 一周 / 一个月）',
+  ocTip.includes('滚动窗口 · 2%') && ocTip.includes('一周 · 19%') && ocTip.includes('一个月 · 33%'),
+  JSON.stringify(ocTip))
+check('悬停带重置倒计时', /重置 \d/.test(ocTip), JSON.stringify(ocTip))
+
+const ccPill = elements(mini.tree).find((node) => node.type === 'span' && String(node.props?.title ?? '').startsWith('Command Code'))
+const ccTip = ccPill ? String(ccPill.props.title) : ''
+check('Command Code 的 5 小时窗口与当月额度都在 tooltip 里',
+  ccTip.includes('5 小时 · 50%') && ccTip.includes('当月额度 · 93%') && ccTip.includes('$64.78 / $70.00'),
+  JSON.stringify(ccTip))
 
 // 登录：点按钮 → 出设备码面板（先挂回设置页）
 mini.mount(pageSlot.component)
