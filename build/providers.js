@@ -66,6 +66,8 @@ export const PRESETS = Object.freeze({
      * this key — so this target only stores the key here.
      */
     quota: false,
+    /** What "test this key" asks: the OpenAI-compatible model list. */
+    probe: 'models',
     /**
      * pi-ai ships no Bailian provider, so adding this target also declares the
      * route in `llm-pi-ai.providers`: the OpenAI-compatible endpoint and the
@@ -471,6 +473,24 @@ function describeNetworkError(error, timeoutMs) {
   if (code === 'ECONNREFUSED') return 'the connection was refused'
   if (code === 'ECONNRESET') return 'the connection was reset'
   return String(error?.message ?? error)
+}
+
+/**
+ * Ask a target that has no quota endpoint whether its key works at all. The
+ * provider's own model list is the cheapest request that answers that.
+ */
+export async function probeTarget(target, io = {}) {
+  const preset = PRESETS[target.preset]
+  if (!preset?.probe) return undefined
+  const base = trimSlash(target.baseURL || preset.baseURL)
+  const url = preset.probe === 'models' ? base + '/models' : preset.probe
+  const body = await fetchJson(url, {
+    headers: { authorization: 'Bearer ' + target.token },
+    signal: io.signal,
+    timeoutMs: io.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  })
+  const list = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : []
+  return { url, count: list.length }
 }
 
 /** The worst window of a card: what a compact chip shows. */

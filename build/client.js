@@ -16,6 +16,7 @@ window.__ModuleLoader__.load({
       refresh: '/quota/refresh',
       key: '/quota/key',
       clear: '/quota/clear',
+      test: '/quota/test',
       providers: '/quota/providers',
       providersRemove: '/quota/providers/remove',
       loginStart: '/quota/login/start',
@@ -112,6 +113,15 @@ window.__ModuleLoader__.load({
       removeFailed: '移除失败',
       needId: '先填 id',
       noQuota: '这家没有公开的额度接口：这张卡只负责把 key 存进 DSH 凭据库，token 用量看上面的「用量」。',
+      testKey: '测试',
+      testing: '测试中…',
+      testOk: '连接正常',
+      testFailed: '连不上',
+      alertWarn: '接近上限',
+      alertCritical: '已达上限',
+      costEstimate: '按目录价估算',
+      todayCost: '今日',
+      stripTitle: '额度与今日花费（点一下刷新）',
     }
 
     var en = {
@@ -198,6 +208,15 @@ window.__ModuleLoader__.load({
       removeFailed: 'Removing failed',
       needId: 'Enter an id first',
       noQuota: 'No public allowance endpoint: this card only stores the key in the DSH credential store. Token usage is under Usage above.',
+      testKey: 'Test',
+      testing: 'Testing…',
+      testOk: 'reachable',
+      testFailed: 'unreachable',
+      alertWarn: 'near limit',
+      alertCritical: 'at limit',
+      costEstimate: 'estimate from list prices',
+      todayCost: 'today',
+      stripTitle: 'Allowance and today cost (click to refresh)',
     }
 
     // —— 主题令牌：只用 DSH 自己公布的别名 ——
@@ -452,6 +471,50 @@ window.__ModuleLoader__.load({
       }))
     }
 
+    // —— 常驻窄条：挂在输入框下方，不用打开设置 ——
+    function QuotaStrip(props) {
+      var t = props.t
+      var state = useQuota()
+      var data = state.data
+      if (!data || data.enabled === false) return null
+      var cards = data.providers
+      if (cards.length === 0) return null
+      var cost = moneyCost(data.usage && data.usage.todayCost)
+      var worstAlert = cards.filter(function (card) { return card.alert === 'critical' })
+      var title = t('stripTitle')
+      if (data.fetchedAt) title += '\n' + t('updated') + formatTime(data.fetchedAt)
+
+      return h('div', {
+        'data-dsh-quota': 'strip',
+        title: title,
+        onClick: function () { void store.refresh() },
+        style: {
+          display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap',
+          padding: '3px 2px 0', fontSize: '11px', color: C.minor,
+          cursor: 'pointer', userSelect: 'none',
+        },
+      },
+      cards.map(function (card) {
+        var worst = card.worst && typeof card.worst.used === 'number' ? card.worst : null
+        var tone = card.alert === 'critical'
+          ? 'error'
+          : card.alert === 'warn' ? 'warn' : card.error ? 'error' : toneOf(worst ? worst.used : undefined)
+        var value = card.error ? '!' : worst ? percentOf(worst.used) + '%' : (card.balance || t('never'))
+        return h('span', {
+          key: card.id,
+          title: card.label + (card.alert ? ' · ' + (card.alert === 'critical' ? t('alertCritical') : t('alertWarn')) : ''),
+          style: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
+        },
+        h('span', { style: Object.assign({}, dotBase, { background: colorOf(tone) }) }),
+        h('span', null, card.label),
+        h('span', { style: { color: card.alert || card.error ? colorOf(tone) : C.text } }, (card.alert ? '⚠ ' : '') + value))
+      }),
+      cost ? h('span', { style: { marginLeft: 'auto' } }, t('todayCost') + ' ≈' + cost) : null,
+      worstAlert.length > 0
+        ? h('span', { style: { color: C.error } }, t('alertCritical') + ' · ' + worstAlert.map(function (card) { return card.label }).join(', '))
+        : null)
+    }
+
     // —— 凭据区 ——
     function credentialState(t, credential) {
       if (!credential || !credential.configured) return t('keyMissing')
@@ -520,6 +583,9 @@ window.__ModuleLoader__.load({
             disabled: busy || draft.trim() === '',
             onClick: props.onSave,
           }, busy ? t('saving') : t('save')),
+          credential.configured
+            ? h('button', { type: 'button', style: buttonQuiet, disabled: busy, onClick: props.onTest }, busy ? t('testing') : t('testKey'))
+            : null,
           credential.configured && credential.writable !== false
             ? h('button', { type: 'button', style: buttonQuiet, disabled: busy, onClick: props.onClear }, t('clear'))
             : null))
@@ -571,6 +637,15 @@ window.__ModuleLoader__.load({
         h('span', { style: { fontSize: '11px', color: C.minor } }, card.id),
         card.plan
           ? h('span', { style: { fontSize: '11px', color: C.brand, border: '1px solid ' + C.brand, borderRadius: '999px', padding: '0 6px' } }, t('plan') + ' · ' + card.plan)
+          : null,
+        card.alert
+          ? h('span', {
+            style: {
+              fontSize: '11px', borderRadius: '999px', padding: '0 6px',
+              border: '1px solid ' + (card.alert === 'critical' ? C.error : C.warn),
+              color: card.alert === 'critical' ? C.error : C.warn,
+            },
+          }, '⚠ ' + (card.alert === 'critical' ? t('alertCritical') : t('alertWarn')))
           : null,
         h('span', { style: { flex: '1' } }),
         term ? h('span', { style: { fontSize: '11px', color: C.minor } }, term) : null,
@@ -628,6 +703,7 @@ window.__ModuleLoader__.load({
           onClear: props.onClear,
           onSignIn: props.onSignIn,
           onSignOut: props.onSignOut,
+          onTest: props.onTest,
         }),
         h(LoginPanel, { t: t, attempt: props.login, onCancel: props.onCancelLogin })),
 
@@ -642,6 +718,14 @@ window.__ModuleLoader__.load({
       if (number >= 1e6) return (number / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'
       if (number >= 1e3) return (number / 1e3).toFixed(1).replace(/\.0$/, '') + 'K'
       return String(Math.round(number))
+    }
+
+    /** 金额：不到一分钱也说出来，否则会被读成「免费」。 */
+    function moneyCost(value) {
+      var number = Number(value)
+      if (!Number.isFinite(number) || number <= 0) return ''
+      if (number < 0.005) return '<$0.01'
+      return '$' + number.toFixed(number < 0.1 ? 3 : 2)
     }
 
     /** 缓存命中率：缓存读取 /（缓存读取 + 新输入）。 */
@@ -691,7 +775,7 @@ window.__ModuleLoader__.load({
           first: true,
           value: compact(tokens),
           label: t('uTokens'),
-          note: t('uInput') + ' ' + compact(week.input) + ' · ' + t('uOutput') + ' ' + compact(week.output),
+          note: t('uInput') + ' ' + compact(week.input) + ' · ' + t('uOutput') + ' ' + compact(week.output) + (usage.cost ? ' · ≈' + moneyCost(usage.cost) : ''),
         }),
         h(UsageTile, { value: compact(week.cacheRead), label: t('uCache'), note: t('uHit') + ' ' + hitRate(week.cacheRead, week.input) + '%' }),
         h(UsageTile, { value: compact(week.reasoning), label: t('uReasoning'), note: t('uCountedOut') }),
@@ -735,7 +819,7 @@ window.__ModuleLoader__.load({
                 })),
               h('span', { style: { fontSize: '11px', color: C.minor, minWidth: '148px', textAlign: 'right', flex: 'none' } },
                 compact(line.input) + ' / ' + compact(line.output) + ' · ' + t('uHit') + ' ' + hitRate(line.cacheRead, line.input) + '%'),
-              h('span', { style: { fontSize: '12px', color: C.text, width: '52px', textAlign: 'right', flex: 'none' } }, compact(total)))
+              h('span', { style: { fontSize: '12px', color: C.text, minWidth: '86px', textAlign: 'right', flex: 'none' } }, compact(total) + (line.cost ? ' · ' + moneyCost(line.cost) : '')))
             }))
           : h('div', { style: { fontSize: '12px', color: C.minor } }, t('uEmpty')))
     }
@@ -933,6 +1017,17 @@ window.__ModuleLoader__.load({
           .catch(function (error) { noticeError(card.id, error) })
           .finally(function () { setWorking('') })
       }
+      function onTest(card) {
+        setWorking(card.id)
+        setNotice(card.id, null)
+        postJson(ROUTES.test, { id: card.id })
+          .then(function (result) {
+            var said = result.ok ? t('testOk') : t('testFailed')
+            setNotice(card.id, { text: said + (result.detail ? ' · ' + result.detail : ''), error: !result.ok })
+          })
+          .catch(function (error) { noticeError(card.id, error) })
+          .finally(function () { setWorking('') })
+      }
       function onClear(card) {
         void run(card.id, postJson(ROUTES.clear, { id: card.id }))
       }
@@ -1028,6 +1123,7 @@ window.__ModuleLoader__.load({
               onDraft: function (value) { setDraft(card.id, value) },
               onSave: function () { onSave(card) },
               onClear: function () { onClear(card) },
+              onTest: function () { onTest(card) },
               onSignIn: function () { onSignIn(card) },
               onSignOut: function () { onSignOut(card) },
               onCancelLogin: function () { onCancelLogin(card) },
@@ -1051,12 +1147,24 @@ window.__ModuleLoader__.load({
       var PageEntry = function (props) {
         return h(QuotaPage, Object.assign({}, props, { t: t }))
       }
+      var StripEntry = function (props) {
+        return h(QuotaStrip, Object.assign({}, props, { t: t }))
+      }
 
       ctx.effect(function () {
         return ctx.slots.inject('conversation.input.right', function () {
           return ctx.slots.register(
             { name: 'conversation.input.right', id: 'quota-chip', order: 40, label: function () { return t('chipLabel') } },
             ChipEntry,
+          )
+        })
+      })
+
+      ctx.effect(function () {
+        return ctx.slots.inject('conversation.composer.dock', function () {
+          return ctx.slots.register(
+            { name: 'conversation.composer.dock', id: 'quota-strip', order: 60, label: function () { return t('stripTitle') } },
+            StripEntry,
           )
         })
       })

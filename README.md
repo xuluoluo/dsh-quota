@@ -6,13 +6,17 @@ DSH 的模型选择器只告诉你「用哪个模型」，不告诉你「这个 
 `key_allowance.go`、`commandcode_plan.go`、`opencode_endpoints.go`）与它的 Usage 页，
 直接问厂商自己的接口，并把每次模型调用的 usage 记下来。
 
-界面上是三块：
+界面上是四块：
 
 1. **composer 右侧的额度 chip** —— 每个 provider 一枚小药丸，取「最紧的那个窗口」，
    点一下强制刷新；
-2. **设置 → 额度**（`settings.section` 里的 `quota` 页）—— 用量四宫格 + 七天条带 + 模型明细，
-   然后是每个 provider 的卡片：窗口进度条（**最紧的排最前**）+ 重置倒计时 + 凭据区；
-3. 页面最下面 **添加供应商** —— 写进 profile 的 `cordis.patch.yml`，重启还在。
+2. **composer 下方的常驻窄条**（`conversation.composer.dock`）—— 不用打开设置就能看到
+   `OpenCode Go 35% · Grok ⚠100% · 今日 ≈$0.42`；过阈值的那家带 ⚠，点一下刷新；
+3. **设置 → 额度**（`settings.section` 里的 `quota` 页）—— 用量四宫格（含估算花费）+ 七天条带 +
+   模型明细，然后是每个 provider 的卡片：窗口进度条（**最紧的排最前**）+ 重置倒计时 + 凭据区
+   （保存 / 清除 / **测试**）；
+4. 列表上方的 **+ 添加供应商** —— 写进 profile 的 `cordis.patch.yml`，重启还在；pi-ai 目录里
+   没有的供应商会顺手把模型路由也写上。
 
 ## 一、额度从哪来
 
@@ -55,6 +59,27 @@ $DSH_HOME/.quota-usage.json          # 默认 ~/.dsh/.quota-usage.json
 
 页面上：TOKEN 总量（输入 / 输出）、缓存读取（含命中率 = 缓存 /（缓存 + 新输入））、
 推理 token、调用次数，七天条带，以及按 `provider / model` 的明细（重的那条在前）。
+
+### 花费：按目录价折算
+
+`build/prices.js` 是从 pi-ai 目录里抽出来的价目表（**USD / 百万 token**，`input / output /
+cacheRead / cacheWrite`），由 `tools/gen-prices.mjs` 从 `_ref/pi-ai/dist/providers/data/*.json`
+生成，覆盖当前这套 route 用到的 36 个模型。有价就出数：TOKEN 卡上写近 7 天的 `≈$3.17`，
+每条模型行写它自己的 `≈$0.013`，窄条写今天。
+
+**这是估算，不是账单**：OpenCode Go / Grok 是订阅制，不是按 token 计价；按目录价折算只是让你
+横向比较「今天这几轮大概值多少钱」。要改价，在配置里覆盖：
+
+```yaml
+prices:
+  "opencode-go/deepseek-v4.1-flash": { input: 0.15, output: 0.6, cacheRead: 0.003 }
+```
+
+### 阈值告警
+
+`alertAt`（默认 90）与 `alertCriticalAt`（默认 97）按「最紧的那个窗口」判；余额卡按
+`balanceFloor`（默认 5，同一币种单位）判。命中的卡片头挂 `⚠ 接近上限 / 已达上限`，
+窄条上那家的百分比变红并加 ⚠，页面顶部也会写一行「已达上限 · Grok」。
 
 ## 三、凭据：登录，或者存 key
 
@@ -163,6 +188,11 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       - id: my-oc                  # 换网关：baseURL 替换预设的默认根路径
         preset: opencode-go
         baseURL: https://opencode.ai/inference/go
+    alertAt: 90            # 最紧窗口到这个百分比 → ⚠ 接近上限
+    alertCriticalAt: 97    # 再到这个 → ⚠ 已达上限（红色）
+    balanceFloor: 5        # 余额卡低于这个数（同币种单位）也算告警
+    prices:                # 覆盖/补充 build/prices.js 的目录价（USD / 百万 token）
+      "opencode-go/deepseek-v4.1-flash": { input: 0.15, output: 0.6, cacheRead: 0.003 }
 ```
 
 ## 七、HTTP 面（前端与 Host 之间）
@@ -175,8 +205,9 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 | POST | `/quota/refresh` | 强制重读额度 |
 | POST | `/quota/key` | `{id, key}` → 写凭据库 |
 | POST | `/quota/clear` | `{id}` → key 就 unset，oauth 就删记录 |
+| POST | `/quota/test` | `{id}` → 真打一次厂商接口，回 `{ok, detail}`（页面上的「测试」按钮） |
 | POST | `/quota/providers` | `{preset, id, label?, baseURL?, apiKeyEnv?}` → 追加到 patch |
-| POST | `/quota/providers/remove` | `{id}` → 从 patch 移除（至少留一个） |
+| POST | `/quota/providers/remove` | `{id}` → 从 patch 移除（至少留一个）；带 `route` 的预设顺带删掉 `llm-pi-ai` 里那条模型路由 |
 | POST | `/quota/login/start` | 领设备码，返回 `userCode` / 授权链接 |
 | GET | `/quota/login/status?id=` | `pending` / `success` / `failed` / `cancelled` |
 | POST | `/quota/login/cancel` | 取消一次登录 |
@@ -200,8 +231,8 @@ cd plugins\dsh-quota
 
 node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 项）
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
-node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（71 项）
-node test\client.test.mjs                     # Client：注册、取数、渲染、用量、存 key、登录、加供应商（50 项）
+node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（78 项）
+node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、存 key、登录、加供应商（60 项）
 
 node tools\grok-login.test.mjs                # grok-login 的 YAML 写入回归（读本机凭据文件）
 ```
@@ -239,7 +270,8 @@ cordis.patch.yml      insert: dsh-quota
 icon.svg              自绘的仪表盘图标
 locale/{en,zh}.json   meta.title / meta.description
 build/providers.js    四个 reader + fetch（纯函数）
-build/usage.js        用量折叠 / 汇总 / 落盘（纯函数 + 一个小 store）
+build/usage.js        用量折叠 / 汇总 / 花费折算 / 落盘（纯函数 + 一个小 store）
+build/prices.js       目录价表（由 tools/gen-prices.mjs 生成，USD / 百万 token）
 build/xai-oauth.js    设备码 / 续期 / grant 形状（fetch 注入）
 build/index.js        Host：配置、快照、路由、登录、供应商、用量接线
 build/client.js       Client：chip + 设置页（纯 JS，无构建步骤）
@@ -248,6 +280,7 @@ tools/*.mjs           与本机凭据打交道的命令行工具（不进 npm �
   grok-login.mjs        走设备码登录并把 grant 写进 ~/.dsh/.credentials.yaml
   grok-verify.mjs       验证那条凭据能不能直接当 xAI API 凭据用
   grok-login.test.mjs   grok-login 的 YAML 写入回归
+  gen-prices.mjs        从 pi-ai 目录重生成 build/prices.js
   asar.mjs              从 DSH 的 app.asar 里 list / cat / extract 包源码
 ```
 

@@ -142,6 +142,8 @@ const cardBase = {
   credential: { auth: 'key', configured: true, source: 'file', hint: 'OPENCODE_GO_API_KEY', writable: true },
 }
 const usageView = {
+  todayCost: 0.42,
+  cost: 3.17,
   today: { calls: 1, input: 12000, output: 900, cacheRead: 20000, cacheWrite: 0, reasoning: 300 },
   window: { calls: 4, input: 47300, output: 3600, cacheRead: 93200, cacheWrite: 0, reasoning: 2300 },
   days: ['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'].map((date, index) => ({
@@ -154,8 +156,8 @@ const usageView = {
     reasoning: 0,
   })),
   models: [
-    { provider: 'opencode-go', model: 'deepseek-v4.1-flash', calls: 3, input: 33000, output: 3600, cacheRead: 93200, cacheWrite: 0, reasoning: 2000 },
-    { provider: 'opencode-go', model: 'glm-5.3-flash', calls: 1, input: 14300, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+    { provider: 'opencode-go', model: 'deepseek-v4.1-flash', calls: 3, input: 33000, output: 3600, cacheRead: 93200, cacheWrite: 0, reasoning: 2000, cost: 0.0132 },
+    { provider: 'opencode-go', model: 'glm-5.3-flash', calls: 1, input: 14300, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: 0.0021 },
   ],
 }
 
@@ -179,6 +181,7 @@ const payload = {
       windows: [{ key: 'weekly', used: 100, resetsAt: '2026-10-20T06:32:13.017Z' }],
       worst: { key: 'weekly', used: 100 },
       parts: [{ name: 'GrokBuild', used: 92 }, { name: 'Cursor', used: 5 }],
+      alert: 'critical',
       credential: { auth: 'oauth', configured: false, hint: 'llm-pi-ai/xai' },
     },
     {
@@ -191,6 +194,7 @@ const payload = {
         { key: 'credits', used: 93, display: '$64.78 / $70.00' },
       ],
       worst: { key: 'credits', used: 93 },
+      alert: 'warn',
       credential: { auth: 'key', configured: true, source: 'cli', account: 'xuluoluo', hint: '.commandcode/auth.json', writable: false },
     },
     {
@@ -216,6 +220,7 @@ let answer = (url, init) => {
   if (url.includes('/quota/login/status')) return { status: 'pending' }
   if (url.endsWith('/quota/key')) return { ok: true }
   if (url.endsWith('/quota/clear')) return { ok: true }
+  if (url.endsWith('/quota/test')) return { ok: true, detail: '178 models' }
   if (url.endsWith('/quota/providers')) return { ok: true }
   if (url.endsWith('/quota/providers/remove')) return { ok: true }
   return payload
@@ -254,14 +259,17 @@ const ctx = {
 }
 mod.apply(ctx)
 
-check('注册了两个 slot', slots.length === 2)
-check('chip 挂在 conversation.input.right（list 槽，不抢模型选择器）',
-  slots[0].spec.name === 'conversation.input.right' && slots[0].spec.id === 'quota-chip')
-check('设置页挂在 settings.section 且有 label', slots[1].spec.name === 'settings.section' && typeof slots[1].spec.label === 'function')
+check('注册了三个 slot', slots.length === 3 && slots.map((s) => s.spec.name).sort().join() === 'conversation.composer.dock,conversation.input.right,settings.section', JSON.stringify(slots.map((s) => s.spec.name)))
+const chipSlot = slots.find((s) => s.spec.name === 'conversation.input.right')
+const stripSlot = slots.find((s) => s.spec.name === 'conversation.composer.dock')
+const pageSlot = slots.find((s) => s.spec.name === 'settings.section')
+check('chip 挂在 conversation.input.right（list 槽，不抢模型选择器）', Boolean(chipSlot) && chipSlot.spec.id === 'quota-chip')
+check('设置页挂在 settings.section 且有 label', Boolean(pageSlot) && typeof pageSlot.spec.label === 'function')
+check('窄条挂在 conversation.composer.dock', Boolean(stripSlot) && stripSlot.spec.id === 'quota-strip')
 check('中英字典都注册了', Boolean(dicts['settings.quota']?.zh?.title && dicts['settings.quota']?.en?.title))
 
 // —— chip ——
-check('首帧（还没取到数）不渲染', mini.mount(slots[0].component) === null)
+check('首帧（还没取到数）不渲染', mini.mount(chipSlot.component) === null)
 await tick()
 check('取数打了 /quota/state', calls.some((call) => call.url.endsWith('/quota/state')), JSON.stringify(calls))
 let chipTexts = textsOf(mini.tree)
@@ -280,7 +288,7 @@ check('点击打了 /quota/refresh 且是 POST',
   calls.some((call) => call.url.endsWith('/quota/refresh') && call.method === 'POST'), JSON.stringify(calls.slice(-3)))
 
 // —— 设置页：数字 ——
-mini.mount(slots[1].component)
+mini.mount(pageSlot.component)
 await tick()
 let pageTexts = textsOf(mini.tree)
 check('页面标题与刷新按钮', pageTexts.includes('额度') && pageTexts.includes('刷新'))
@@ -347,7 +355,30 @@ check('添加带上预设与 id', addCall && JSON.parse(addCall.body).id === 'my
 check('添加成功后表单收起',
   !elements(mini.tree).some((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id')))
 
-// 登录：点按钮 → 出设备码面板
+// —— 成本、告警、测试连接 ——
+check('用量区给出估算花费', pageTexts.join('').includes('≈') && pageTexts.join('').includes('.17'), JSON.stringify(pageTexts.slice(0, 20)))
+check('模型行也带花费', pageTexts.join('').includes('.013'))
+check('超过阈值时卡头挂告警', pageTexts.join('').includes('已达上限') && pageTexts.join('').includes('接近上限'))
+
+const testButton = findByText(mini.tree, '测试')
+check('有「测试」按钮', Boolean(testButton))
+await testButton.props.onClick()
+await tick(80)
+check('测试打了 /quota/test', calls.some((call) => call.url.endsWith('/quota/test') && call.method === 'POST'))
+check('测试结果显示在卡上', textsOf(mini.tree).join('').includes('连接正常') && textsOf(mini.tree).join('').includes('178 models'),
+  JSON.stringify(textsOf(mini.tree).slice(-10)))
+
+// —— 常驻窄条 ——
+mini.mount(stripSlot.component)
+await tick()
+const stripTexts = textsOf(mini.tree)
+check('窄条显示每家与百分比', stripTexts.includes('OpenCode Go') && stripTexts.some((text) => text.includes('100%')), JSON.stringify(stripTexts))
+check('窄条显示今日花费', stripTexts.join('').includes('今日 ≈$0.42'), JSON.stringify(stripTexts))
+check('窄条对告警加 ⚠', stripTexts.some((text) => text.indexOf('⚠') === 0), JSON.stringify(stripTexts))
+
+// 登录：点按钮 → 出设备码面板（先挂回设置页）
+mini.mount(pageSlot.component)
+await tick()
 const signIn = findByText(mini.tree, '登录 Grok')
 await signIn.props.onClick()
 await tick(60)

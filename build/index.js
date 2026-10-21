@@ -13,7 +13,8 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { PRESETS, readQuota, worstOf } from './providers.js'
+import { PRICES } from './prices.js'
+import { PRESETS, probeTarget, readQuota, worstOf } from './providers.js'
 import { createUsageStore, usageFile } from './usage.js'
 import { XAI_OAUTH, accountOf, pollDeviceFlow, startDeviceFlow, usableGrant } from './xai-oauth.js'
 
@@ -25,6 +26,7 @@ export const inject = ['webServer']
 const ROUTES = Object.freeze({
   state: '/quota/state',
   refresh: '/quota/refresh',
+  test: '/quota/test',
   key: '/quota/key',
   clear: '/quota/clear',
   providers: '/quota/providers',
@@ -87,10 +89,31 @@ function splitRecord(value) {
   return { scope: value.slice(0, slash), id: value.slice(slash + 1) }
 }
 
+/** Price overrides from config, keeping only entries a catalog price could use. */
+function normalizePrices(raw) {
+  const out = {}
+  if (!raw || typeof raw !== 'object') return out
+  for (const [key, value] of Object.entries(raw)) {
+    if (!value || typeof value !== 'object') continue
+    const input = Number(value.input)
+    const output = Number(value.output)
+    if (!Number.isFinite(input) || !Number.isFinite(output)) continue
+    const line = { input, output }
+    if (Number.isFinite(Number(value.cacheRead))) line.cacheRead = Number(value.cacheRead)
+    if (Number.isFinite(Number(value.cacheWrite))) line.cacheWrite = Number(value.cacheWrite)
+    out[key] = line
+  }
+  return out
+}
+
 function normalize(config) {
   const enabled = pick(config, 'enabled', true) !== false
   const refreshMs = numberPick(config, 'refreshMs', DEFAULT_REFRESH_MS, 10_000, 3_600_000)
   const timeoutMs = numberPick(config, 'timeoutMs', 8000, 1000, 60_000)
+  const alertAt = numberPick(config, 'alertAt', 90, 10, 100)
+  const alertCriticalAt = numberPick(config, 'alertCriticalAt', 97, alertAt, 100)
+  const balanceFloor = numberPick(config, 'balanceFloor', 5, 0, 1_000_000)
+  const prices = { ...PRICES, ...normalizePrices(pick(config, 'prices', {})) }
   const configured = pick(config, 'providers', [])
   const list = Array.isArray(configured) && configured.length > 0 ? configured : DEFAULT_TARGETS
   const providers = []
@@ -111,7 +134,7 @@ function normalize(config) {
       record: typeof entry.record === 'string' && entry.record !== '' ? entry.record : preset.record,
     })
   }
-  return { enabled, refreshMs, timeoutMs, providers }
+  return { enabled, refreshMs, timeoutMs, alertAt, alertCriticalAt, balanceFloor, prices, providers }
 }
 
 // ---- diagnostics ---------------------------------------------------------------
@@ -323,6 +346,24 @@ function createSignIn(ctx, settings) {
 // ---- one snapshot ---------------------------------------------------------------
 
 /**
+ * Whether a card deserves to be shouted about, and how loudly: the tightest
+ * window over `alertAt`, or a balance at or under `balanceFloor`.
+ */
+function alertOf(worst, balance, settings) {
+  const used = worst?.used
+  if (typeof used === 'number' && used >= settings.alertAt) {
+    return used >= settings.alertCriticalAt ? 'critical' : 'warn'
+  }
+  if (typeof balance === 'string') {
+    const amount = Number(balance.replace(/[^0-9.-]/g, ''))
+    if (Number.isFinite(amount) && amount <= settings.balanceFloor) {
+      return amount <= 0 ? 'critical' : 'warn'
+    }
+  }
+  return undefined
+}
+
+/**
  * Ask every target at once and keep each failure on its own card: a quota page
  * whose Grok card is missing because OpenCode failed would be worse than
  * useless. A card that cannot be read says why, in the vendor's own words
@@ -387,11 +428,13 @@ function createService(ctx, settings, signIn, usage) {
       const windows = (Array.isArray(reading.windows) ? reading.windows : [])
         .slice()
         .sort((a, b) => (b?.used ?? 0) - (a?.used ?? 0))
+      const worst = worstOf(windows) ?? null
       return {
         ...card,
         url: reading.url,
         windows,
-        worst: worstOf(windows) ?? null,
+        worst,
+        alert: alertOf(worst, reading.balance, settings),
         plan: reading.plan,
         until: reading.until,
         renew: reading.renew,
@@ -626,6 +669,40 @@ function registerRoutes(ctx, service, settings, signIn) {
     sendJson(res, 200, { ok: true })
   })
 
+  // "Does this credential work?" — one request to the provider, answered as
+  // data so the page can show the vendor's own words instead of an HTTP code.
+  route(ROUTES.test, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const target = targetOf(service, body.id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    const preset = PRESETS[target.preset]
+    const credentials = ctx.get('credentials')
+    let credential
+    try {
+      credential = preset.auth === 'oauth'
+        ? await oauthCredential(credentials, target, settings.timeoutMs)
+        : await keyCredential(credentials, preset, target)
+    } catch (error) {
+      return sendJson(res, 200, { ok: false, detail: String(error?.message ?? error) })
+    }
+    if (!credential.token) {
+      return jsonError(res, 400, credential.error ?? `no credential for ${credential.hint ?? preset.label}`)
+    }
+    try {
+      const measured = preset.probe
+        ? await probeTarget({ ...target, token: credential.token }, { timeoutMs: settings.timeoutMs })
+        : await readQuota({ ...target, token: credential.token }, { timeoutMs: settings.timeoutMs, planCache: new Map() })
+      const detail = typeof measured?.count === 'number'
+        ? `${measured.count} models`
+        : `${Array.isArray(measured?.windows) ? measured.windows.length : 0} windows`
+      sendJson(res, 200, { ok: true, detail, url: measured?.url })
+    } catch (error) {
+      sendJson(res, 200, { ok: false, detail: String(error?.message ?? error) })
+    }
+  })
+
   route(ROUTES.providers, async (req, res) => {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
     if (!sameOrigin(req)) return forbidden(res, req)
@@ -675,7 +752,9 @@ function registerRoutes(ctx, service, settings, signIn) {
     if (!targets.some((entry) => entry.id === id)) return jsonError(res, 404, 'unknown-provider')
     if (targets.length <= 1) return jsonError(res, 400, 'at least one provider has to stay')
     try {
+      const preset = PRESETS[targets.find((entry) => entry.id === id).preset]
       const providers = await editProviders(ctx, (rows) => rows.filter((row) => row.id !== id))
+      if (preset.route) await removeModelRoute(ctx, { id, route: preset.route })
       sendJson(res, 200, { ok: true, providers })
     } catch (error) {
       jsonError(res, 500, String(error?.message ?? error))
@@ -798,6 +877,27 @@ async function upsertModelRoute(ctx, { id, label, reference, route }) {
   return written
 }
 
+/**
+ * Take the route back out when its provider is removed — but only when it still
+ * looks like the one this plugin wrote, so a hand-edited route survives.
+ */
+async function removeModelRoute(ctx, { id, route }) {
+  const found = modelRouteRow(ctx)
+  if (!found) return false
+  let removed = false
+  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+    const base = { ...inherited, ...current }
+    const providers = { ...(base.providers ?? {}) }
+    const existing = providers[id]
+    if (existing && typeof existing === 'object' && existing.baseURL === route.baseURL) {
+      delete providers[id]
+      removed = true
+    }
+    return { ...base, providers }
+  })
+  return removed
+}
+
 // ---- usage ----------------------------------------------------------------------
 
 /**
@@ -835,7 +935,7 @@ export function apply(ctx, config) {
   const signIn = createSignIn(ctx, settings)
   ctx.effect(() => () => signIn.dispose())
 
-  const usage = createUsageStore()
+  const usage = createUsageStore({ priceOf: (provider, model) => settings.prices[provider + '/' + model] })
   void usage.ready()
   ctx.effect(() => () => { void usage.flush() })
   try {
