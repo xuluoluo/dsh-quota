@@ -167,6 +167,7 @@ const payload = {
   refreshMs: 60000,
   usage: usageView,
   usageFile: 'C:/Users/x/.dsh/.quota-usage.json',
+  showChip: true,
   presets: [
     { id: 'opencode-go', label: 'OpenCode Go', auth: 'key' },
     { id: 'xai-billing', label: 'Grok', auth: 'oauth' },

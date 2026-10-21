@@ -190,6 +190,7 @@ records.set('llm-pi-ai/xai', { kind: 'grant', payload: { type: 'oauth', access: 
 
 let state = await call(ROUTES.state)
 check('GET /quota/state 回 200', state.status === 200)
+check('chip 默认关掉（窄条已经在显示同一份数字）', state.json.showChip === false)
 check('五张卡都在，顺序是配置顺序', (state.json.providers ?? []).map((c) => c.id).join() === 'opencode-go,grok,commandcode,deepseek,bailian')
 let cards = providers(state.json)
 check('OpenCode 卡：三个窗口 + 最坏值', cards['opencode-go'].windows.length === 3 && cards['opencode-go'].worst.used === 33)

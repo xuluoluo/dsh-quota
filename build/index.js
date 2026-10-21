@@ -113,6 +113,9 @@ function normalize(config) {
   const alertAt = numberPick(config, 'alertAt', 90, 10, 100)
   const alertCriticalAt = numberPick(config, 'alertCriticalAt', 97, alertAt, 100)
   const balanceFloor = numberPick(config, 'balanceFloor', 5, 0, 1_000_000)
+  // The strip below the composer shows the same numbers as the chip, so the
+  // chip is off unless someone asks for it.
+  const showChip = pick(config, 'showChip', false) === true
   const prices = { ...PRICES, ...normalizePrices(pick(config, 'prices', {})) }
   const configured = pick(config, 'providers', [])
   const list = Array.isArray(configured) && configured.length > 0 ? configured : DEFAULT_TARGETS
@@ -134,7 +137,7 @@ function normalize(config) {
       record: typeof entry.record === 'string' && entry.record !== '' ? entry.record : preset.record,
     })
   }
-  return { enabled, refreshMs, timeoutMs, alertAt, alertCriticalAt, balanceFloor, prices, providers }
+  return { enabled, refreshMs, timeoutMs, alertAt, alertCriticalAt, balanceFloor, showChip, prices, providers }
 }
 
 // ---- diagnostics ---------------------------------------------------------------
@@ -481,6 +484,7 @@ function createService(ctx, settings, signIn, usage) {
         usage: await usage.summary(),
         usageFile: usageFile(),
         presets: Object.entries(PRESETS).map(([id, preset]) => ({ id, label: preset.label, auth: preset.auth })),
+        showChip: settings.showChip,
       }
       if (!settings.enabled) return { enabled: false, fetchedAt: null, refreshMs: settings.refreshMs, providers: [], ...measured }
       if (force || !fresh(Date.now())) await refresh()

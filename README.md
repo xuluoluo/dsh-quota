@@ -8,10 +8,9 @@ DSH 的模型选择器只告诉你「用哪个模型」，不告诉你「这个 
 
 界面上是四块：
 
-1. **composer 右侧的额度 chip** —— 每个 provider 一枚小药丸，取「最紧的那个窗口」，
-   点一下强制刷新；
-2. **composer 下方的常驻窄条**（`conversation.composer.dock`）—— 不用打开设置就能看到
-   `OpenCode Go 35% · Grok ⚠100% · 今日 ≈$0.42`；过阈值的那家带 ⚠，点一下刷新；
+1. **composer 下方的常驻窄条**（`conversation.composer.dock`）—— 不用打开设置就能看到
+   `OpenCode Go 35% · Grok ⚠100% · 今日 ≈$0.42`；过阈值的那家带 ⚠，点一下刷新。
+   composer 右侧那枚 chip 与它是同一份数字，**默认关掉**（`showChip: true` 才回来）；
 3. **设置 → 额度**（`settings.section` 里的 `quota` 页）—— 用量四宫格（含估算花费）+ 七天条带 +
    模型明细，然后是每个 provider 的卡片：窗口进度条（**最紧的排最前**）+ 重置倒计时 + 凭据区
    （保存 / 清除 / **测试**）；
@@ -188,6 +187,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       - id: my-oc                  # 换网关：baseURL 替换预设的默认根路径
         preset: opencode-go
         baseURL: https://opencode.ai/inference/go
+    showChip: true         # 把 composer 右侧那枚 chip 打开（默认只有下方窄条）
     alertAt: 90            # 最紧窗口到这个百分比 → ⚠ 接近上限
     alertCriticalAt: 97    # 再到这个 → ⚠ 已达上限（红色）
     balanceFloor: 5        # 余额卡低于这个数（同币种单位）也算告警

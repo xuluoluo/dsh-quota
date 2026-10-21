@@ -300,6 +300,7 @@ window.__ModuleLoader__.load({
         refreshMs: typeof data.refreshMs === 'number' && data.refreshMs >= 10000 ? data.refreshMs : 60000,
         usage: data.usage && typeof data.usage === 'object' ? data.usage : null,
         usageFile: typeof data.usageFile === 'string' ? data.usageFile : '',
+        showChip: data.showChip === true,
         presets: Array.isArray(data.presets) ? data.presets.filter(function (preset) {
           return preset && typeof preset === 'object' && typeof preset.id === 'string'
         }) : [],
@@ -431,7 +432,8 @@ window.__ModuleLoader__.load({
       var t = props.t
       var state = useQuota()
       var data = state.data
-      if (!data || data.enabled === false) return null
+      // 窄条与 chip 是同一份数字，默认只留窄条（配置 showChip: true 才回来）。
+      if (!data || data.enabled === false || data.showChip !== true) return null
       var cards = data.providers
       if (cards.length === 0) return null
 
@@ -480,7 +482,6 @@ window.__ModuleLoader__.load({
       var cards = data.providers
       if (cards.length === 0) return null
       var cost = moneyCost(data.usage && data.usage.todayCost)
-      var worstAlert = cards.filter(function (card) { return card.alert === 'critical' })
       var title = t('stripTitle')
       if (data.fetchedAt) title += '\n' + t('updated') + formatTime(data.fetchedAt)
 
@@ -509,10 +510,7 @@ window.__ModuleLoader__.load({
         h('span', null, card.label),
         h('span', { style: { color: card.alert || card.error ? colorOf(tone) : C.text } }, (card.alert ? '⚠ ' : '') + value))
       }),
-      cost ? h('span', { style: { marginLeft: 'auto' } }, t('todayCost') + ' ≈' + cost) : null,
-      worstAlert.length > 0
-        ? h('span', { style: { color: C.error } }, t('alertCritical') + ' · ' + worstAlert.map(function (card) { return card.label }).join(', '))
-        : null)
+      cost ? h('span', { style: { marginLeft: 'auto' } }, t('todayCost') + ' ≈' + cost) : null)
     }
 
     // —— 凭据区 ——
