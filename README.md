@@ -87,9 +87,20 @@ Command Code 没存 key 时自动读它 CLI 的登录 `~/.commandcode/auth.json`
 ### 阿里云百炼：只有 key
 
 百炼的 DashScope key 是 OpenAI 兼容的（`https://dashscope.aliyuncs.com/compatible-mode/v1`），
-但这版 pi-ai 的 provider 目录里没有百炼，所以这张卡只负责把 key 存成 `DASHSCOPE_API_KEY`。
-要让 DSH 真能用上 qwen：去「设置 → 模型 → 添加供应商」新增一条，Base URL 填上面那个地址、
-凭据引用填 `DASHSCOPE_API_KEY`；之后调用产生的 token 照样进上面的用量统计。
+但这版 pi-ai 的 provider 目录里没有百炼。所以除了把 key 存成 `DASHSCOPE_API_KEY`，添加这个
+供应商时还会往 `llm-pi-ai.providers` 写一条路由：
+
+`yaml
+ali:
+  displayName: 阿里云百炼
+  apiKeyEnv: DASHSCOPE_API_KEY
+  api: openai-completions
+  baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  models: [qwen3.8-max, qwen3.8-flash]
+`
+
+模型 id 是从 `GET /compatible-mode/v1/models` 的实际返回里挑的（那份列表有 178 个）。
+之后调用产生的 token 照样进上面的用量统计。
 
 ## 四、添加 / 移除供应商
 
@@ -100,7 +111,17 @@ Command Code 没存 key 时自动读它 CLI 的登录 `~/.commandcode/auth.json`
 不是插件内部的状态文件 —— 所以重启、升级都还在，也能被别的工具读到。第一次添加会把
 三个内置目标显式写下来（否则「写了 providers 就是整份替换」会把它们弄丢）。
 
-现在有五种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、`deepseek-api`（只有余额）、`bailian`（只存 key）。
+现在有五种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、
+`deepseek-api`（只有余额）、`bailian`（只存 key）。
+
+加了供应商还要能在**模型**里看见。pi-ai 目录里已经有的（`opencode-go` / `xai`）不需要做什么；
+目录里没有的（目前只有 `bailian`），预设里带了一份 `route`，添加时插件会顺手在
+`llm-pi-ai.providers` 写一条路由（`api` / `baseURL` / `models`），否则它只活在额度页、
+模型选择器里看不到。
+
+**凭据引用填的是名字，不是 key**：`apiKeyEnv` 必须长成 `DASHSCOPE_API_KEY` 这样；
+填成 key 会被 400 拒掉，配置里要是已经写成 key 形状，读的时候会被丢掉、退回预设的引用
+（避免把 key 当引用带到页面上）。
 同一个预设可以加多次 —— 换网关、换 key、换账号都行。
 
 ## 五、安装

@@ -109,7 +109,10 @@ const credentials = {
 const routes = new Map()
 const listeners = new Map()
 // The profile's own patch layer, as the config editor sees it.
-const configRows = [{ options: { id: 'dsh-quota', name: '@local/dsh-quota', config: {} } }]
+const configRows = [
+  { options: { id: 'dsh-quota', name: '@local/dsh-quota', config: {} } },
+  { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' } } } } },
+]
 const configEditor = {
   entries: () => configRows,
   async edit(entry, change) {
@@ -343,6 +346,42 @@ savedRows = configRows[0].options.config.providers
 check('移除后配置里没有它了', savedRows.length === 5 && !savedRows.some((row) => row.id === 'my-oc'))
 check('移除不存在的 provider 回 404', (await call(ROUTES.providersRemove, { method: 'POST', body: { id: 'nope' } })).status === 404)
 check('移除写回时保留了其它字段', configRows[0].options.config.providers.every((row) => typeof row.preset === 'string'))
+
+// —— 加一个 pi-ai 目录里没有的供应商：同时注册模型路由 ——
+const addedBailian = await call(ROUTES.providers, { method: 'POST', body: { id: 'ali-test', preset: 'bailian', label: '阿里云测试' } })
+check('加百炼回 200 并带回写入的路由',
+  addedBailian.status === 200 && addedBailian.json.route?.api === 'openai-completions',
+  JSON.stringify(addedBailian.json).slice(0, 200))
+let piAiRoutes = configRows[1].options.config.providers
+check('模型路由写进了 llm-pi-ai.providers', Boolean(piAiRoutes['ali-test']) && piAiRoutes['ali-test'].apiKeyEnv === 'DASHSCOPE_API_KEY')
+check('路由带 baseURL 与两个模型', piAiRoutes['ali-test'].baseURL.includes('dashscope') && piAiRoutes['ali-test'].models.length === 2)
+check('路由带显示名', piAiRoutes['ali-test'].displayName === '阿里云测试')
+check('原有路由没被弄丢', Boolean(piAiRoutes['opencode-go']))
+check('凭据引用填成 key 会被拒（400）',
+  (await call(ROUTES.providers, { method: 'POST', body: { id: 'bad-ref', preset: 'bailian', apiKeyEnv: 'sk-ws-abc.def.ghi' } })).status === 400)
+
+// 配置里本来就把 key 填进 apiKeyEnv：读的时候要丢掉，不能把它当引用泄露出去
+const leakRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => (name === 'credentials' ? credentials : name === 'configEditor' ? configEditor : undefined),
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { leakRoutes.set(route.path, route.handler); return () => {} } },
+}, { providers: [{ id: 'leaky', preset: 'bailian', apiKeyEnv: 'sk-ws-should-not-leak' }] })
+const leakState = await (async () => {
+  const req = Readable.from([])
+  req.method = 'GET'
+  req.url = ROUTES.state
+  req.headers = { host: HOST }
+  const res = makeRes()
+  await leakRoutes.get(ROUTES.state)(req, res)
+  await res.done
+  return JSON.parse(res.body)
+})()
+check('key 形状的 apiKeyEnv 被丢掉，退回预设引用',
+  leakState.providers[0].credential.hint === 'DASHSCOPE_API_KEY' && !JSON.stringify(leakState).includes('should-not-leak'),
+  leakState.providers[0].credential.hint)
 
 // —— 用量：包住 llm/stream，只记成功的调用 ——
 const watchStream = listeners.get('llm/stream')

@@ -55,6 +55,8 @@ const DEFAULT_TARGETS = Object.freeze([
 
 const DEFAULT_REFRESH_MS = 60_000
 const MAX_BODY_BYTES = 16 * 1024
+/** The grammar a credential reference follows — an environment-variable name. */
+const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 // ---- configuration -------------------------------------------------------------
 
@@ -97,12 +99,15 @@ function normalize(config) {
     const preset = PRESETS[entry.preset]
     if (!preset) continue
     const id = typeof entry.id === 'string' && entry.id !== '' ? entry.id : entry.preset
+    // A reference is a name, never a secret: a key pasted into this field is
+    // dropped here rather than published on the page and into the payload.
+    const reference = typeof entry.apiKeyEnv === 'string' && REF_PATTERN.test(entry.apiKeyEnv) ? entry.apiKeyEnv : preset.apiKeyEnv
     providers.push({
       id,
       preset: entry.preset,
       label: typeof entry.label === 'string' && entry.label !== '' ? entry.label : preset.label,
       baseURL: typeof entry.baseURL === 'string' && entry.baseURL !== '' ? entry.baseURL : preset.baseURL,
-      apiKeyEnv: typeof entry.apiKeyEnv === 'string' && entry.apiKeyEnv !== '' ? entry.apiKeyEnv : preset.apiKeyEnv,
+      apiKeyEnv: reference,
       record: typeof entry.record === 'string' && entry.record !== '' ? entry.record : preset.record,
     })
   }
@@ -629,14 +634,33 @@ function registerRoutes(ctx, service, settings, signIn) {
     const id = typeof body.id === 'string' ? body.id.trim() : ''
     if (!ID_PATTERN.test(id)) return jsonError(res, 400, 'the id must start with a letter or digit and hold only letters, digits and dashes')
     if (service.targets().some((entry) => entry.id === id)) return jsonError(res, 409, `"${id}" is already a provider`)
+    const preset = PRESETS[body.preset]
     const row = { id, preset: body.preset }
-    for (const key of ['label', 'baseURL', 'apiKeyEnv', 'record']) {
+    for (const key of ['label', 'baseURL', 'record']) {
       const value = typeof body[key] === 'string' ? body[key].trim() : ''
       if (value !== '') row[key] = value
     }
+    const reference = typeof body.apiKeyEnv === 'string' ? body.apiKeyEnv.trim() : ''
+    if (reference !== '') {
+      if (!REF_PATTERN.test(reference)) {
+        return jsonError(res, 400, 'the credential reference is a name such as DASHSCOPE_API_KEY — paste the key itself into the card, not here')
+      }
+      row.apiKeyEnv = reference
+    }
     try {
       const providers = await editProviders(ctx, (rows) => [...rows, row])
-      sendJson(res, 200, { ok: true, providers })
+      // A preset that pi-ai does not know also needs its model route, or the
+      // new provider would never reach the model selector.
+      let route = null
+      if (preset.route) {
+        route = await upsertModelRoute(ctx, {
+          id,
+          label: row.label,
+          reference: row.apiKeyEnv ?? preset.apiKeyEnv,
+          route: preset.route,
+        })
+      }
+      sendJson(res, 200, { ok: true, providers, route })
     } catch (error) {
       jsonError(res, 500, String(error?.message ?? error))
     }
@@ -732,6 +756,46 @@ async function editProviders(ctx, mutate) {
     return { ...base, providers: next }
   })
   return next
+}
+
+/** The llm-pi-ai row, which owns the model routes a new provider needs. */
+function modelRouteRow(ctx) {
+  const editor = ctx.get('configEditor')
+  if (!editor) return undefined
+  let entries
+  try {
+    entries = editor.entries()
+  } catch {
+    return undefined
+  }
+  const entry = entries.find((candidate) => candidate?.options?.id === 'llm-pi-ai' || candidate?.options?.name === '@deepseek-ai/dsh-llm-pi-ai')
+  return entry ? { editor, entry } : undefined
+}
+
+/**
+ * Declare a provider pi-ai's own catalog does not know. A route lives in
+ * `llm-pi-ai.providers`, so writing it is what puts the provider — and its
+ * models — into the Models page and the model selector.
+ */
+async function upsertModelRoute(ctx, { id, label, reference, route }) {
+  const found = modelRouteRow(ctx)
+  if (!found) return null
+  let written
+  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+    const base = { ...inherited, ...current }
+    const providers = { ...(base.providers ?? {}) }
+    written = {
+      ...(providers[id] ?? {}),
+      ...(label ? { displayName: label } : {}),
+      apiKeyEnv: reference,
+      api: route.api,
+      baseURL: route.baseURL,
+      models: route.models.map((model) => ({ ...model })),
+    }
+    providers[id] = written
+    return { ...base, providers }
+  })
+  return written
 }
 
 // ---- usage ----------------------------------------------------------------------

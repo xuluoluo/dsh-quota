@@ -66,6 +66,20 @@ export const PRESETS = Object.freeze({
      * this key — so this target only stores the key here.
      */
     quota: false,
+    /**
+     * pi-ai ships no Bailian provider, so adding this target also declares the
+     * route in `llm-pi-ai.providers`: the OpenAI-compatible endpoint and the
+     * models it serves (ids read from
+     * `GET https://dashscope.aliyuncs.com/compatible-mode/v1/models`).
+     */
+    route: {
+      api: 'openai-completions',
+      baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: [
+        { id: 'qwen3.8-max', name: 'Qwen3.8 Max' },
+        { id: 'qwen3.8-flash', name: 'Qwen3.8 Flash' },
+      ],
+    },
   },
 })
 
