@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "额度",
-    "description": "显示 OpenCode Go、Grok、Command Code 的剩余额度，可保存 API key，并支持 Grok 登录获取 token。"
+    "description": "显示 OpenCode Go、Grok、Command Code 的剩余额度，可添加供应商并保存 API key，支持 Grok 登录；composer 左侧顺带显示当前文件夹与 git 分支。"
   }
 }

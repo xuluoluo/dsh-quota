@@ -3,6 +3,7 @@
 // them, with fetch and the credential store faked at their seams. This is the
 // test that says the page will have data — the readers are covered separately.
 import { Readable } from 'node:stream'
+import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -141,7 +142,18 @@ const ctx = {
   },
 }
 
-apply(ctx, {})
+// 配置只认写下来的：插件不再自己初始化五家供应商（2026-10-22 改）。
+const CONFIGURED = {
+  providers: [
+    { id: 'opencode-go', preset: 'opencode-go', apiKeyEnv: 'OPENCODE_GO_API_KEY' },
+    { id: 'grok', preset: 'xai-billing', record: 'llm-pi-ai/xai' },
+    { id: 'commandcode', preset: 'commandcode', apiKeyEnv: 'COMMANDCODE_API_KEY' },
+    { id: 'deepseek', preset: 'deepseek-api', apiKeyEnv: 'DEEPSEEK_API_KEY' },
+    { id: 'bailian', preset: 'bailian', apiKeyEnv: 'DASHSCOPE_API_KEY' },
+  ],
+}
+
+apply(ctx, CONFIGURED)
 
 function makeRes() {
   const res = { headersSent: false, status: 0, body: '', done: undefined, _resolve: undefined }
@@ -154,8 +166,8 @@ function makeRes() {
   return res
 }
 
-async function call(route, { method = 'GET', body, origin = ORIGIN, host = HOST, url } = {}) {
-  const handler = routes.get(route)
+async function callOn(map, route, { method = 'GET', body, origin = ORIGIN, host = HOST, url } = {}) {
+  const handler = map.get(route)
   if (!handler) throw new Error(`no route ${route}`)
   const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))])
   req.method = method
@@ -172,6 +184,8 @@ async function call(route, { method = 'GET', body, origin = ORIGIN, host = HOST,
   try { json = res.body === '' ? undefined : JSON.parse(res.body) } catch { json = res.body }
   return { status: res.status, json }
 }
+
+const call = (route, options) => callOn(routes, route, options)
 
 const providers = (state) => Object.fromEntries((state.providers ?? []).map((card) => [card.id, card]))
 const waitFor = async (predicate, timeoutMs = 5000) => {
@@ -290,6 +304,209 @@ check('再登一次又是 pending', second.status === 200 && second.json.status 
 check('取消登录回 ok', (await call(ROUTES.loginCancel, { method: 'POST', body: { id: 'grok' } })).json.ok === true)
 check('取消后状态不再是 pending', (await call(ROUTES.loginStatus, { url: `${ROUTES.loginStatus}?id=grok` })).json.status !== 'pending')
 
+// —— 没有配置就没有卡：不替用户凭空初始化 ——
+const emptyRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => (name === 'credentials' ? credentials : undefined),
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { emptyRoutes.set(route.path, route.handler); return () => {} } },
+}, {})
+const emptyState = await (async () => {
+  const req = Readable.from([])
+  req.method = 'GET'
+  req.url = ROUTES.state
+  req.headers = { host: HOST }
+  const res = makeRes()
+  await emptyRoutes.get(ROUTES.state)(req, res)
+  await res.done
+  return JSON.parse(res.body)
+})()
+check('没配置 providers 时一张卡也没有', emptyState.providers.length === 0, JSON.stringify(emptyState.providers))
+
+// —— composer 左侧：会话所在的文件夹与 git 分支 ——
+const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-repo-'))
+execFileSync('git', ['init', '-b', 'quota-test', repoDir])
+execFileSync('git', ['-C', repoDir, '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '--allow-empty', '-m', 'seed'])
+const wsRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => (name === 'sessions'
+    ? { get: (id) => (id === 's1' ? { header: { cwd: repoDir } } : undefined) }
+    : name === 'credentials' ? credentials : undefined),
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { wsRoutes.set(route.path, route.handler); return () => {} } },
+}, {})
+const ws = await callOn(wsRoutes, ROUTES.workspace, { url: `${ROUTES.workspace}?sessionId=s1` })
+check('GET /quota/workspace 回 200', ws.status === 200, JSON.stringify(ws.json))
+check('给出会话的文件夹与名字',
+  ws.json.root === repoDir && ws.json.name === path.basename(repoDir),
+  JSON.stringify(ws.json))
+check('给出 git 分支与仓库根', ws.json.branch === 'quota-test' && ws.json.gitRoot.replace(/\\/g, '/').toLowerCase() === repoDir.replace(/\\/g, '/').toLowerCase(),
+  JSON.stringify(ws.json))
+const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-plain-'))
+const plainRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => (name === 'sessions'
+    ? { get: () => ({ header: { cwd: nonRepo } }) }
+    : name === 'credentials' ? credentials : undefined),
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { plainRoutes.set(route.path, route.handler); return () => {} } },
+}, {})
+const plain = await callOn(plainRoutes, ROUTES.workspace, { url: `${ROUTES.workspace}?sessionId=s2` })
+check('不是 git 仓库时只给文件夹', plain.status === 200 && plain.json.branch === null && plain.json.root === nonRepo, JSON.stringify(plain.json))
+check('不知道的会话回 404',
+  (await callOn(wsRoutes, ROUTES.workspace, { url: `${ROUTES.workspace}?sessionId=nope` })).status === 404)
+check('缺 sessionId 回 400', (await callOn(wsRoutes, ROUTES.workspace, { url: ROUTES.workspace })).status === 400)
+
+// —— 卡头：模型路由挂没挂上 ——
+const mountRows = [
+  {
+    options: {
+      id: 'llm-pi-ai',
+      name: '@deepseek-ai/dsh-llm-pi-ai',
+      config: {
+        providers: {
+          ali: { api: 'openai-completions', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1/', models: [] },
+        },
+      },
+    },
+  },
+  {
+    options: {
+      id: 'dsh-quota',
+      name: '@local/dsh-quota',
+      config: { providers: [{ id: 'bailian', preset: 'bailian', apiKeyEnv: 'DASHSCOPE_API_KEY' }] },
+    },
+  },
+]
+const mountRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => {
+    if (name === 'llm') return { listProviders: async () => [{ id: 'ali' }] }
+    if (name === 'configEditor') return { entries: () => mountRows, edit: async () => undefined }
+    if (name === 'credentials') return credentials
+    return undefined
+  },
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { mountRoutes.set(route.path, route.handler); return () => {} } },
+}, mountRows[1].options.config)
+const mountedState = await callOn(mountRoutes, ROUTES.state)
+check('预设名字变了也认得同一个网关（ali 就是百炼）',
+  mountedState.json.providers[0].inModels === true && mountedState.json.providers[0].modelProvider === 'ali',
+  JSON.stringify(mountedState.json.providers[0]))
+
+const orphanRows = [{ options: { id: 'dsh-quota', name: '@local/dsh-quota', config: { providers: [{ id: 'bailian', preset: 'bailian' }] } } }]
+const orphanRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => {
+    if (name === 'llm') return { listProviders: async () => [] }
+    if (name === 'configEditor') return { entries: () => orphanRows, edit: async () => undefined }
+    if (name === 'credentials') return credentials
+    return undefined
+  },
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { orphanRoutes.set(route.path, route.handler); return () => {} } },
+}, orphanRows[0].options.config)
+const orphanState = await callOn(orphanRoutes, ROUTES.state)
+check('没有路由的卡会自己说「未接入模型」',
+  orphanState.json.providers[0].inModels === false && orphanState.json.providers[0].modelReason === 'not-mounted',
+  JSON.stringify(orphanState.json.providers[0]))
+
+// —— 一家的模型：看 / 获取 / 加 / 删 ——
+const modelRows = [
+  {
+    options: {
+      id: 'llm-pi-ai',
+      name: '@deepseek-ai/dsh-llm-pi-ai',
+      config: {
+        providers: {
+          'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] },
+        },
+      },
+    },
+  },
+  {
+    options: {
+      id: 'dsh-quota',
+      name: '@local/dsh-quota',
+      config: { providers: [{ id: 'opencode-go', preset: 'opencode-go' }] },
+    },
+  },
+]
+const modelRoutes = new Map()
+let discoverCall
+const modelEditor = {
+  entries: () => modelRows,
+  async edit(entry, change) {
+    const next = change(structuredClone(entry.options.config ?? {}), {})
+    entry.options.config = next
+    return next
+  },
+}
+const modelLlm = {
+  async listProviders() { return [{ id: 'opencode-go' }] },
+  async listModels() {
+    return [
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000 },
+      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' },
+    ]
+  },
+  async discoverModels(settingsNs, request) {
+    discoverCall = { settingsNs, request }
+    return [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }, { id: 'new-model', name: 'New Model' }]
+  },
+}
+apply({
+  logger: ctx.logger,
+  get: (name) => {
+    if (name === 'llm') return modelLlm
+    if (name === 'configEditor') return modelEditor
+    if (name === 'credentials') return credentials
+    return undefined
+  },
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { modelRoutes.set(route.path, route.handler); return () => {} } },
+}, modelRows[1].options.config)
+const modelCall = (route, options) => callOn(modelRoutes, route, options)
+
+const listed = await modelCall(ROUTES.providerModels, { url: `${ROUTES.providerModels}?id=opencode-go` })
+check('GET /quota/provider/models 列出这家的模型',
+  listed.status === 200 && listed.json.models.length === 2 && listed.json.models[0].id === 'deepseek-v4.1-flash',
+  JSON.stringify(listed.json))
+
+const discovery = await modelCall(ROUTES.providerModelsDiscover, { method: 'POST', body: { id: 'opencode-go' } })
+check('获取模型走 llm.discoverModels',
+  discovery.status === 200 && discovery.json.models.length === 2 && discoverCall?.settingsNs === 'llm-pi-ai' && discoverCall.request.provider === 'opencode-go',
+  JSON.stringify({ discovery: discovery.json, discoverCall }))
+
+const addedModel = await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { id: 'new-model', name: 'New Model' } } })
+let modelConfig = modelRows[0].options.config.providers['opencode-go'].models
+check('添加模型写进 llm-pi-ai.providers[].models',
+  addedModel.status === 200 && modelConfig.length === 2 && modelConfig[1].id === 'new-model',
+  JSON.stringify({ added: addedModel.json, modelConfig }))
+check('重复模型回 409', (await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { id: 'new-model' } } })).status === 409)
+check('没给 id 回 400', (await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { name: 'x' } } })).status === 400)
+
+const removedModel = await modelCall(ROUTES.providerModelsRemove, { method: 'POST', body: { id: 'opencode-go', modelId: 'deepseek-v4.1-flash' } })
+modelConfig = modelRows[0].options.config.providers['opencode-go'].models
+check('删除模型只留下其它条目',
+  removedModel.status === 200 && modelConfig.length === 1 && modelConfig[0].id === 'new-model',
+  JSON.stringify({ removed: removedModel.json, modelConfig }))
+check('删除不存在的模型回 404',
+  (await modelCall(ROUTES.providerModelsRemove, { method: 'POST', body: { id: 'opencode-go', modelId: 'nope' } })).status === 404)
+check('不能把最后一条删掉',
+  (await modelCall(ROUTES.providerModelsRemove, { method: 'POST', body: { id: 'opencode-go', modelId: 'new-model' } })).status === 400)
+
 // —— 没有凭据服务：说清楚，而不是崩 ——
 const bareRoutes = new Map()
 apply({
@@ -298,7 +515,7 @@ apply({
   effect: (fn) => fn(),
   on: () => () => {},
   webServer: { register: (route) => { bareRoutes.set(route.path, route.handler); return () => {} } },
-}, {})
+}, CONFIGURED)
 const bareState = await (async () => {
   const req = Readable.from([])
   req.method = 'GET'
@@ -329,40 +546,99 @@ if (fs.existsSync(cliAuth)) {
 }
 
 // —— 添加 / 移除供应商：写进 profile 自己的 patch 层 ——
-const added = await call(ROUTES.providers, { method: 'POST', body: { id: 'my-oc', preset: 'opencode-go', baseURL: 'https://gateway.example/zen/go', label: 'My OC' } })
-check('POST /quota/providers 回 200', added.status === 200, JSON.stringify(added.json))
-let savedRows = configRows[0].options.config.providers
-check('新 provider 落在配置里', savedRows.length === 6 && savedRows[5].id === 'my-oc')
-check('只写了给出的字段', savedRows[5].baseURL === 'https://gateway.example/zen/go' && savedRows[5].label === 'My OC' && savedRows[5].preset === 'opencode-go')
-check('第一次添加会把四个默认目标显式写下来', savedRows.slice(0, 5).map((row) => row.id).join() === 'opencode-go,grok,commandcode,deepseek,bailian')
-check('重复 id 回 409', (await call(ROUTES.providers, { method: 'POST', body: { id: 'opencode-go', preset: 'opencode-go' } })).status === 409)
-check('未知 preset 回 400', (await call(ROUTES.providers, { method: 'POST', body: { id: 'weird', preset: 'nope' } })).status === 400)
-check('非法 id 回 400', (await call(ROUTES.providers, { method: 'POST', body: { id: 'bad id!', preset: 'opencode-go' } })).status === 400)
-const removed = await (async () => {
-  // A real Host reloads the plugin with the edited config; the fake does the same,
-  // so the remove below sees the list the add just wrote.
-  routes.clear()
-  apply(ctx, configRows[0].options.config)
-  return call(ROUTES.providersRemove, { method: 'POST', body: { id: 'my-oc' } })
-})()
-check('POST /quota/providers/remove 回 200', removed.status === 200, JSON.stringify(removed.json))
-savedRows = configRows[0].options.config.providers
-check('移除后配置里没有它了', savedRows.length === 5 && !savedRows.some((row) => row.id === 'my-oc'))
-check('移除不存在的 provider 回 404', (await call(ROUTES.providersRemove, { method: 'POST', body: { id: 'nope' } })).status === 404)
-check('移除写回时保留了其它字段', configRows[0].options.config.providers.every((row) => typeof row.preset === 'string'))
+// 这一组用自己的一份配置与路由，免得把上面那套读取用例的卡片弄乱。
+const editRows = [
+  {
+    options: {
+      id: 'dsh-quota',
+      name: '@local/dsh-quota',
+      config: { providers: [{ id: 'opencode-go', preset: 'opencode-go', apiKeyEnv: 'OPENCODE_GO_API_KEY' }] },
+    },
+  },
+  {
+    options: {
+      id: 'llm-pi-ai',
+      name: '@deepseek-ai/dsh-llm-pi-ai',
+      config: { providers: { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'deepseek-v4.1-flash' }] } } },
+    },
+  },
+]
+const editRoutes = new Map()
+const editEditor = {
+  entries: () => editRows,
+  async edit(entry, change) {
+    const next = change(structuredClone(entry.options.config ?? {}), {})
+    entry.options.config = next
+    return next
+  },
+}
+function editHost() {
+  editRoutes.clear()
+  apply({
+    logger: ctx.logger,
+    get: (name) => (name === 'credentials' ? credentials : name === 'configEditor' ? editEditor : undefined),
+    effect: (fn) => fn(),
+    on: () => () => {},
+    webServer: { register: (route) => { editRoutes.set(route.path, route.handler); return () => {} } },
+  }, editRows[0].options.config)
+}
+editHost()
+const editCall = (route, options) => callOn(editRoutes, route, options)
 
-// —— 加一个 pi-ai 目录里没有的供应商：同时注册模型路由 ——
-const addedBailian = await call(ROUTES.providers, { method: 'POST', body: { id: 'ali-test', preset: 'bailian', label: '阿里云测试' } })
+const added = await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'deepseek-api', key: 'sk-deepseek' } })
+check('POST /quota/providers 回 200', added.status === 200, JSON.stringify(added.json))
+check('id 默认取模型路由名', added.json.id === 'deepseek', JSON.stringify(added.json))
+let savedRows = editRows[0].options.config.providers
+check('新 provider 落在配置里，且没有顺手补默认值', savedRows.length === 2 && savedRows[1].id === 'deepseek' && savedRows[1].preset === 'deepseek-api', JSON.stringify(savedRows))
+let piAiRoutes = editRows[1].options.config.providers
+check('pi-ai 认识的供应商只补一条 apiKeyEnv', piAiRoutes.deepseek?.apiKeyEnv === 'DEEPSEEK_API_KEY', JSON.stringify(piAiRoutes.deepseek))
+check('已有的模型目录没被改写', Array.isArray(piAiRoutes['opencode-go'].models) && piAiRoutes['opencode-go'].models.length === 1)
+check('表单里贴的 key 直接存进凭据库', refs.get('DEEPSEEK_API_KEY') === 'sk-deepseek' && added.json.stored === true)
+
+editHost() // 配置写完，Host 会重载插件；这里也重来一遍
+check('同一个预设不能加第二遍', (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'deepseek-api' } })).status === 409)
+
+// 卡片在、模型路由被手工删了：一键接回去
+delete editRows[1].options.config.providers.deepseek
+const attached = await editCall(ROUTES.providersAttach, { method: 'POST', body: { id: 'deepseek' } })
+check('未接入的卡能一键接回模型路由',
+  attached.status === 200 && editRows[1].options.config.providers.deepseek?.apiKeyEnv === 'DEEPSEEK_API_KEY',
+  JSON.stringify(attached.json))
+check('未知 preset 回 400', (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'nope' } })).status === 400)
+check('非法 id 回 400', (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'bailian', id: 'bad id!' } })).status === 400)
+
+// 换一家 pi-ai 目录里没有的：顺带把模型路由写上
+editHost()
+const addedBailian = await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'bailian', label: '阿里云测试' } })
 check('加百炼回 200 并带回写入的路由',
-  addedBailian.status === 200 && addedBailian.json.route?.api === 'openai-completions',
+  addedBailian.status === 200 && addedBailian.json.model?.entry?.api === 'openai-completions',
   JSON.stringify(addedBailian.json).slice(0, 200))
-let piAiRoutes = configRows[1].options.config.providers
-check('模型路由写进了 llm-pi-ai.providers', Boolean(piAiRoutes['ali-test']) && piAiRoutes['ali-test'].apiKeyEnv === 'DASHSCOPE_API_KEY')
-check('路由带 baseURL 与两个模型', piAiRoutes['ali-test'].baseURL.includes('dashscope') && piAiRoutes['ali-test'].models.length === 2)
-check('路由带显示名', piAiRoutes['ali-test'].displayName === '阿里云测试')
+piAiRoutes = editRows[1].options.config.providers
+check('模型路由写进了 llm-pi-ai.providers', Boolean(piAiRoutes.bailian) && piAiRoutes.bailian.apiKeyEnv === 'DASHSCOPE_API_KEY')
+check('路由带 baseURL 与两个模型', piAiRoutes.bailian.baseURL.includes('dashscope') && piAiRoutes.bailian.models.length === 2)
+check('路由带显示名', piAiRoutes.bailian.displayName === '阿里云测试')
 check('原有路由没被弄丢', Boolean(piAiRoutes['opencode-go']))
 check('凭据引用填成 key 会被拒（400）',
-  (await call(ROUTES.providers, { method: 'POST', body: { id: 'bad-ref', preset: 'bailian', apiKeyEnv: 'sk-ws-abc.def.ghi' } })).status === 400)
+  (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'xai-billing', apiKeyEnv: 'sk-ws-abc.def.ghi' } })).status === 400)
+check('登录型供应商不收 key',
+  (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'xai-billing', key: 'sk-1' } })).status === 400)
+
+// —— 移除：卡片走，模型路由留下的部分按种类处理 ——
+editHost()
+const removed = await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'deepseek' } })
+check('POST /quota/providers/remove 回 200', removed.status === 200, JSON.stringify(removed.json))
+savedRows = editRows[0].options.config.providers
+check('移除后配置里没有它了', !savedRows.some((row) => row.id === 'deepseek'), JSON.stringify(savedRows))
+check('pi-ai 目录里的路由不会被删掉', Boolean(editRows[1].options.config.providers.deepseek))
+check('移除不存在的 provider 回 404', (await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'nope' } })).status === 404)
+
+editHost()
+const removedBailian = await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'bailian' } })
+check('移除插件写过的路由也会带走它',
+  removedBailian.status === 200 && !editRows[1].options.config.providers.bailian,
+  JSON.stringify(editRows[1].options.config.providers))
+check('剩最后一家也能移除',
+  (await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'opencode-go' } })).status === 200)
 
 // 配置里本来就把 key 填进 apiKeyEnv：读的时候要丢掉，不能把它当引用泄露出去
 const leakRoutes = new Map()

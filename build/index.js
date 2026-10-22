@@ -17,6 +17,7 @@ import { PRICES } from './prices.js'
 import { DEFAULT_PROMPT, createPredictor } from './prediction.js'
 import { PRESETS, probeTarget, readQuota, worstOf } from './providers.js'
 import { createUsageStore, usageFile } from './usage.js'
+import { createWorkspaceProbe } from './workspace.js'
 import { XAI_OAUTH, accountOf, pollDeviceFlow, startDeviceFlow, usableGrant } from './xai-oauth.js'
 
 export const name = 'dsh-quota'
@@ -35,9 +36,15 @@ const ROUTES = Object.freeze({
   clear: '/quota/clear',
   providers: '/quota/providers',
   providersRemove: '/quota/providers/remove',
+  providersAttach: '/quota/providers/attach',
+  providerModels: '/quota/provider/models',
+  providerModelsDiscover: '/quota/provider/models/discover',
+  providerModelsAdd: '/quota/provider/models/add',
+  providerModelsRemove: '/quota/provider/models/remove',
   loginStart: '/quota/login/start',
   loginStatus: '/quota/login/status',
   loginCancel: '/quota/login/cancel',
+  workspace: '/quota/workspace',
 })
 
 /** The Loader row this bundle inserts — the row a provider is added to. */
@@ -45,19 +52,6 @@ const CONFIG_ID = 'dsh-quota'
 
 /** The record Grok's sign-in writes — `dsh-llm-pi-ai`'s own key for xAI. */
 const XAI_RECORD = 'llm-pi-ai/xai'
-
-/**
- * What the plugin watches with no configuration: the three providers whose
- * quota DSH does not show. Each is a route the user may already have; a route
- * this profile has not mounted still gets a card, saying what is missing.
- */
-const DEFAULT_TARGETS = Object.freeze([
-  { id: 'opencode-go', preset: 'opencode-go', apiKeyEnv: 'OPENCODE_GO_API_KEY' },
-  { id: 'grok', preset: 'xai-billing', record: XAI_RECORD },
-  { id: 'commandcode', preset: 'commandcode', apiKeyEnv: 'COMMANDCODE_API_KEY' },
-  { id: 'deepseek', preset: 'deepseek-api', apiKeyEnv: 'DEEPSEEK_API_KEY' },
-  { id: 'bailian', preset: 'bailian', apiKeyEnv: 'DASHSCOPE_API_KEY' },
-])
 
 const DEFAULT_REFRESH_MS = 60_000
 const MAX_BODY_BYTES = 16 * 1024
@@ -122,7 +116,10 @@ function normalize(config) {
   const showChip = pick(config, 'showChip', false) === true
   const prices = { ...PRICES, ...normalizePrices(pick(config, 'prices', {})) }
   const configured = pick(config, 'providers', [])
-  const list = Array.isArray(configured) && configured.length > 0 ? configured : DEFAULT_TARGETS
+  // No configuration means no cards: a provider the user never added is not
+  // something this page should invent, and one that DSH cannot route would
+  // only promise models that never show up in the selector.
+  const list = Array.isArray(configured) ? configured : []
   const providers = []
   for (const entry of list) {
     if (!entry || typeof entry !== 'object') continue
@@ -139,6 +136,9 @@ function normalize(config) {
       baseURL: typeof entry.baseURL === 'string' && entry.baseURL !== '' ? entry.baseURL : preset.baseURL,
       apiKeyEnv: reference,
       record: typeof entry.record === 'string' && entry.record !== '' ? entry.record : preset.record,
+      // Which model route this quota card belongs to, when there is one. The
+      // page says whether that route is mounted instead of assuming it is.
+      modelProvider: preset.model?.provider,
     })
   }
   return { enabled, refreshMs, timeoutMs, alertAt, alertCriticalAt, balanceFloor, showChip, prices, predict: normalizePredict(pick(config, 'predict', {})), providers }
@@ -388,6 +388,42 @@ function alertOf(worst, balance, settings) {
 }
 
 /**
+ * The provider id a hand-declared route is actually mounted under. A route
+ * added before this preset got its own name (Bailian was `ali` once) still
+ * counts as reachable when the endpoints are the same string.
+ */
+function mountedRouteFor(ctx, preset) {
+  const route = preset?.route
+  if (!route?.baseURL) return null
+  const found = modelRouteRow(ctx)
+  const providers = found?.entry?.options?.config?.providers
+  if (!providers || typeof providers !== 'object') return null
+  const want = String(route.baseURL).replace(/\/+$/, '').toLowerCase()
+  for (const [id, row] of Object.entries(providers)) {
+    if (!row || typeof row !== 'object') continue
+    if (typeof row.baseURL !== 'string') continue
+    if (String(row.baseURL).replace(/\/+$/, '').toLowerCase() === want) return id
+  }
+  return null
+}
+
+/**
+ * The provider ids DSH currently mounts, or `null` when this composition has no
+ * llm service to ask. The page uses it to tell a card that is also a model route
+ * from one that only holds a credential.
+ */
+async function mountedProviders(ctx) {
+  const llm = ctx.get('llm')
+  if (!llm || typeof llm.listProviders !== 'function') return null
+  try {
+    const providers = await llm.listProviders()
+    return new Set((Array.isArray(providers) ? providers : []).map((provider) => provider?.id).filter(Boolean))
+  } catch {
+    return null
+  }
+}
+
+/**
  * Ask every target at once and keep each failure on its own card: a quota page
  * whose Grok card is missing because OpenCode failed would be worse than
  * useless. A card that cannot be read says why, in the vendor's own words
@@ -401,10 +437,25 @@ function createService(ctx, settings, signIn, usage) {
 
   const fresh = (now) => snapshot !== undefined && now - cachedAt < settings.refreshMs
 
-  async function card(target) {
+  async function card(target, mounted) {
     const preset = PRESETS[target.preset]
     const card = { id: target.id, label: target.label, preset: target.preset, auth: preset.auth }
     if (preset.auth === 'key' && preset.keysUrl) card.keysUrl = preset.keysUrl
+    // Whether the provider behind this card is also a route DSH can serve
+    // models from. `null` = the Host has no llm service to ask.
+    card.modelProvider = target.modelProvider ?? null
+    card.inModels = target.modelProvider
+      ? mounted === null ? null : mounted.has(target.modelProvider)
+      : false
+    if (card.inModels === false && preset.model?.kind === 'route') {
+      const mountedAs = mountedRouteFor(ctx, preset)
+      if (mountedAs) {
+        card.modelProvider = mountedAs
+        card.inModels = true
+      }
+    }
+    if (preset.model === null) card.modelReason = 'quota-only'
+    else if (card.inModels === false) card.modelReason = 'not-mounted'
     const login = signIn.publicOf(target.id)
     if (login) card.login = login
 
@@ -472,7 +523,8 @@ function createService(ctx, settings, signIn, usage) {
   }
 
   async function collect() {
-    const cards = await Promise.all(settings.providers.map((target) => card(target)))
+    const mounted = await mountedProviders(ctx)
+    const cards = await Promise.all(settings.providers.map((target) => card(target, mounted)))
     return {
       enabled: true,
       fetchedAt: new Date().toISOString(),
@@ -491,7 +543,13 @@ function createService(ctx, settings, signIn, usage) {
       })
       .catch((error) => {
         log(ctx, 'warn', '[quota] the refresh failed: %s', String(error?.message ?? error))
-        return snapshot ?? { enabled: true, fetchedAt: new Date().toISOString(), refreshMs: settings.refreshMs, providers: [], error: 'the quota refresh failed' }
+        // A failed first refresh still gets a snapshot: the page then renders
+        // its empty state instead of a state object with no `providers` at all.
+        if (snapshot === undefined) {
+          snapshot = { enabled: true, fetchedAt: new Date().toISOString(), refreshMs: settings.refreshMs, providers: [], error: 'the quota refresh failed' }
+          cachedAt = Date.now()
+        }
+        return snapshot
       })
       .finally(() => {
         inflight = undefined
@@ -504,7 +562,13 @@ function createService(ctx, settings, signIn, usage) {
       const measured = {
         usage: await usage.summary(),
         usageFile: usageFile(),
-        presets: Object.entries(PRESETS).map(([id, preset]) => ({ id, label: preset.label, auth: preset.auth })),
+        presets: Object.entries(PRESETS).map(([id, preset]) => ({
+          id,
+          label: preset.label,
+          auth: preset.auth,
+          addsModels: Boolean(preset.model),
+          modelProvider: preset.model?.provider ?? null,
+        })),
         showChip: settings.showChip,
         predict: settings.predict,
         defaultPrompt: DEFAULT_PROMPT,
@@ -622,6 +686,7 @@ function targetOf(service, id) {
 
 function registerRoutes(ctx, service, settings, signIn) {
   const predictor = createPredictor(ctx, () => settings)
+  const probeWorkspace = createWorkspaceProbe()
   const route = (path, handler) => {
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
@@ -643,6 +708,28 @@ function registerRoutes(ctx, service, settings, signIn) {
     if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
     if (!sameOrigin(req)) return forbidden(res, req)
     sendJson(res, 200, await service.state())
+  })
+
+  // The composer's left toolbar: which folder this conversation works in, and
+  // the branch that folder is on. A session id is required — the answer belongs
+  // to one conversation, not to whatever directory the Host process started in.
+  route(ROUTES.workspace, async (req, res) => {
+    if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
+    const sessionId = url.searchParams.get('sessionId') ?? ''
+    if (sessionId === '') return jsonError(res, 400, 'sessionId is required')
+    const session = ctx.get('sessions')?.get?.(sessionId)
+    if (!session) return jsonError(res, 404, 'unknown-session')
+    const cwd = session.header?.cwd ?? session.cwd ?? session.meta?.cwd
+    if (typeof cwd !== 'string' || cwd === '') return jsonError(res, 404, 'this session names no working directory')
+    try {
+      sendJson(res, 200, await probeWorkspace(cwd))
+    } catch (error) {
+      // The folder is known even when git is not: answer with it, say nothing
+      // about a branch, and keep the composer rendering.
+      sendJson(res, 200, { root: cwd, name: '', branch: null, gitRoot: null, detached: false, error: String(error?.message ?? error) })
+    }
   })
 
   route(ROUTES.refresh, async (req, res) => {
@@ -802,11 +889,19 @@ function registerRoutes(ctx, service, settings, signIn) {
     if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
     if (!sameOrigin(req)) return forbidden(res, req)
     const body = await readJson(req)
-    if (!PRESETS[body.preset]) return jsonError(res, 400, `unknown preset "${String(body.preset)}"`)
-    const id = typeof body.id === 'string' ? body.id.trim() : ''
-    if (!ID_PATTERN.test(id)) return jsonError(res, 400, 'the id must start with a letter or digit and hold only letters, digits and dashes')
-    if (service.targets().some((entry) => entry.id === id)) return jsonError(res, 409, `"${id}" is already a provider`)
     const preset = PRESETS[body.preset]
+    if (!preset) return jsonError(res, 400, `unknown preset "${String(body.preset)}"`)
+    const targets = service.targets()
+    // One card per vendor: a second copy would ask the same endpoint with the
+    // same credential and print the same number twice.
+    const already = targets.find((entry) => entry.preset === body.preset)
+    if (already) return jsonError(res, 409, `this provider is already on the page as "${already.id}"`)
+    // The id is the model route's name where there is one, so a card and the
+    // model selector agree; an explicit id stays possible for a second gateway.
+    const wanted = typeof body.id === 'string' ? body.id.trim() : ''
+    const id = wanted !== '' ? wanted : preset.model?.provider ?? preset.id
+    if (!ID_PATTERN.test(id)) return jsonError(res, 400, 'the id must start with a letter or digit and hold only letters, digits and dashes')
+    if (targets.some((entry) => entry.id === id)) return jsonError(res, 409, `"${id}" is already a provider`)
     const row = { id, preset: body.preset }
     for (const key of ['label', 'baseURL', 'record']) {
       const value = typeof body[key] === 'string' ? body[key].trim() : ''
@@ -819,20 +914,144 @@ function registerRoutes(ctx, service, settings, signIn) {
       }
       row.apiKeyEnv = reference
     }
+    const key = typeof body.key === 'string' ? body.key.trim() : ''
+    if (key !== '' && preset.auth !== 'key') return jsonError(res, 400, 'this provider signs in instead of taking a key')
+    const credentials = key === '' ? undefined : ctx.get('credentials')
+    if (key !== '' && !credentials) return jsonError(res, 503, 'this composition mounts no credential store')
     try {
-      const providers = await editProviders(ctx, (rows) => [...rows, row])
-      // A preset that pi-ai does not know also needs its model route, or the
-      // new provider would never reach the model selector.
-      let route = null
-      if (preset.route) {
-        route = await upsertModelRoute(ctx, {
-          id,
-          label: row.label,
-          reference: row.apiKeyEnv ?? preset.apiKeyEnv,
-          route: preset.route,
-        })
+      // The model side first: if it fails, nothing else is written and the page
+      // never shows a card whose models are missing.
+      const model = await attachModel(ctx, { preset, row, id })
+      // The key before the card: a stored key without a card is harmless and
+      // clearable, a card claiming a key it never got is not.
+      let stored = false
+      if (key !== '') {
+        await credentials.set(row.apiKeyEnv ?? preset.apiKeyEnv, key)
+        stored = true
       }
-      sendJson(res, 200, { ok: true, providers, route })
+      const providers = await editProviders(ctx, (rows) => [...rows, row])
+      sendJson(res, 200, { ok: true, id, providers, stored, model })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
+  // A card that was configured before the model wiring existed (or whose route
+  // was removed by hand) can be connected without adding it a second time.
+  route(ROUTES.providersAttach, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const target = targetOf(service, body.id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    const preset = PRESETS[target.preset]
+    if (!preset.model) return jsonError(res, 400, 'this provider has no model route to attach')
+    try {
+      const model = await attachModel(ctx, { preset, row: target, id: target.id })
+      sendJson(res, 200, { ok: true, model })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
+  // —— 一家的模型：看、问厂商要、加、删 ——
+  // 全部写回 `llm-pi-ai.providers[provider].models`，所以模型选择器下一次
+  // 请求看到的就是这里改出来的那份。
+  route(ROUTES.providerModels, async (req, res) => {
+    if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
+    const target = targetOf(service, url.searchParams.get('id'))
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    if (!target.modelProvider) return jsonError(res, 400, 'this provider has no model route')
+    const llm = ctx.get('llm')
+    if (!llm?.listModels) return jsonError(res, 503, 'this composition mounts no llm service')
+    const provider = await resolvedProvider(ctx, target, llm)
+    try {
+      sendJson(res, 200, { ok: true, provider, models: await listModels(llm, provider) })
+    } catch (error) {
+      sendJson(res, 200, { ok: false, provider, models: [], error: String(error?.message ?? error) })
+    }
+  })
+
+  // "这家现在到底能提供哪些模型？" — 目录里有的按目录回答（不发请求），
+  // 没有的（百炼这种手工路由）才拿存的 key 去问 `GET {baseURL}/models`。
+  route(ROUTES.providerModelsDiscover, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const target = targetOf(service, body.id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    if (!target.modelProvider) return jsonError(res, 400, 'this provider has no model route')
+    const llm = ctx.get('llm')
+    if (!llm?.discoverModels) return jsonError(res, 503, 'this composition mounts no llm service')
+    const provider = await resolvedProvider(ctx, target, llm)
+    const found = modelRouteRow(ctx)
+    const settingsNs = found?.entry?.options?.id ?? 'llm-pi-ai'
+    const { route } = routeConfigOf(ctx, provider)
+    const preset = PRESETS[target.preset]
+    const request = { provider }
+    const baseURL = route?.baseURL ?? preset.route?.baseURL
+    const api = route?.api ?? preset.route?.api
+    if (typeof baseURL === 'string' && baseURL !== '') request.baseURL = baseURL
+    if (typeof api === 'string' && api !== '') request.api = api
+    try {
+      const models = await llm.discoverModels(settingsNs, request)
+      sendJson(res, 200, {
+        ok: true,
+        provider,
+        models: (Array.isArray(models) ? models : []).filter((model) => model && typeof model.id === 'string' && model.id !== ''),
+      })
+    } catch (error) {
+      // The vendor's own words ("answered 401; check the API key") are the
+      // useful part; the page shows them as-is.
+      sendJson(res, 200, { ok: false, error: String(error?.message ?? error) })
+    }
+  })
+
+  route(ROUTES.providerModelsAdd, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const target = targetOf(service, body.id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    if (!target.modelProvider) return jsonError(res, 400, 'this provider has no model route')
+    const model = body.model && typeof body.model === 'object' ? body.model : {}
+    const modelId = typeof model.id === 'string' ? model.id.trim() : ''
+    if (!MODEL_ID_PATTERN.test(modelId)) return jsonError(res, 400, 'a model id is required')
+    const name = typeof model.name === 'string' && model.name.trim() !== '' ? model.name.trim() : undefined
+    const llm = ctx.get('llm')
+    const provider = await resolvedProvider(ctx, target, llm)
+    try {
+      const rows = await effectiveModelRows(ctx, llm, provider)
+      if (rows.some((row) => row.id === modelId)) return jsonError(res, 409, `"${modelId}" is already a model here`)
+      const next = [...rows, { id: modelId, ...(name ? { name } : {}) }]
+      await writeRouteModels(ctx, provider, next)
+      sendJson(res, 200, { ok: true, models: next })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
+  route(ROUTES.providerModelsRemove, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const target = targetOf(service, body.id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    if (!target.modelProvider) return jsonError(res, 400, 'this provider has no model route')
+    const modelId = typeof body.modelId === 'string' ? body.modelId.trim() : ''
+    if (modelId === '') return jsonError(res, 400, 'modelId is required')
+    const llm = ctx.get('llm')
+    const provider = await resolvedProvider(ctx, target, llm)
+    try {
+      const rows = await effectiveModelRows(ctx, llm, provider)
+      const next = rows.filter((row) => row.id !== modelId)
+      if (next.length === rows.length) return jsonError(res, 404, 'unknown-model')
+      // llm-pi-ai refuses a route that resolves no models at all.
+      if (next.length === 0) return jsonError(res, 400, 'at least one model has to stay on this provider')
+      await writeRouteModels(ctx, provider, next)
+      sendJson(res, 200, { ok: true, models: next })
     } catch (error) {
       jsonError(res, 500, String(error?.message ?? error))
     }
@@ -844,12 +1063,17 @@ function registerRoutes(ctx, service, settings, signIn) {
     const body = await readJson(req)
     const id = typeof body.id === 'string' ? body.id.trim() : ''
     const targets = service.targets()
-    if (!targets.some((entry) => entry.id === id)) return jsonError(res, 404, 'unknown-provider')
-    if (targets.length <= 1) return jsonError(res, 400, 'at least one provider has to stay')
+    const target = targets.find((entry) => entry.id === id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
     try {
-      const preset = PRESETS[targets.find((entry) => entry.id === id).preset]
+      const preset = PRESETS[target.preset]
       const providers = await editProviders(ctx, (rows) => rows.filter((row) => row.id !== id))
-      if (preset.route) await removeModelRoute(ctx, { id, route: preset.route })
+      // A route this plugin wrote goes with the card; a catalog entry stays,
+      // because the provider may already have served models before it was
+      // added here and removing quota tracking must not break the model list.
+      if (preset.model?.kind === 'route' && preset.route) {
+        await removeModelRoute(ctx, { id: preset.model.provider ?? id, route: preset.route })
+      }
       sendJson(res, 200, { ok: true, providers })
     } catch (error) {
       jsonError(res, 500, String(error?.message ?? error))
@@ -902,9 +1126,9 @@ function configRow(ctx) {
   return entry ? { editor, entry } : undefined
 }
 
-/** The rows a config starts from when it names none — the plugin's defaults. */
+/** The rows a config starts from: none. A provider exists once it is added. */
 function defaultProviderRows() {
-  return DEFAULT_TARGETS.map((target) => ({ ...target }))
+  return []
 }
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/i
@@ -987,7 +1211,128 @@ async function upsertModelRoute(ctx, { id, label, reference, route }) {
     providers[id] = written
     return { ...base, providers }
   })
-  return written
+  return { provider: id, wired: true, entry: written }
+}
+
+/**
+ * Put a provider pi-ai already knows into `llm-pi-ai.providers`, so the model
+ * selector lists it. An entry that is already there is left exactly as it is —
+ * the user may have narrowed its models or pointed it at another gateway.
+ */
+async function ensureCatalogRoute(ctx, { provider, reference }) {
+  const found = modelRouteRow(ctx)
+  if (!found) return { provider, wired: false, reason: 'this profile keeps no llm-pi-ai row' }
+  let entry
+  let wired = false
+  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+    const base = { ...inherited, ...current }
+    const providers = { ...(base.providers ?? {}) }
+    const existing = providers[provider]
+    if (existing !== undefined && typeof existing === 'object' && existing !== null) {
+      entry = existing
+      return base
+    }
+    entry = reference ? { apiKeyEnv: reference } : {}
+    providers[provider] = entry
+    wired = true
+    return { ...base, providers }
+  })
+  return { provider, wired, entry }
+}
+
+/**
+ * The one place a provider's model side is written: adding a provider and
+ * re-attaching one both come through here, so the card list and the model
+ * selector cannot drift apart.
+ */
+async function attachModel(ctx, { preset, row, id }) {
+  const spec = preset?.model
+  if (!spec) return null
+  if (spec.kind === 'route' && preset.route) {
+    return upsertModelRoute(ctx, {
+      id: spec.provider ?? id,
+      label: row?.label,
+      reference: row?.apiKeyEnv ?? preset.apiKeyEnv,
+      route: preset.route,
+    })
+  }
+  if (spec.kind === 'catalog') {
+    return ensureCatalogRoute(ctx, {
+      provider: spec.provider,
+      // An OAuth provider authenticates through its record; an apiKeyEnv would
+      // override that login on every request.
+      reference: spec.oauth ? undefined : (row?.apiKeyEnv ?? preset.apiKeyEnv),
+    })
+  }
+  return null
+}
+
+/** Model ids are endpoint ids: no whitespace, no path punctuation games. */
+const MODEL_ID_PATTERN = /^\S{1,200}$/
+
+/**
+ * The provider id a card's model route really has. Usually the preset's own
+ * name, but a route added by hand under another name (Bailian once wrote `ali`)
+ * is found through its endpoint instead of being declared a second time.
+ */
+async function resolvedProvider(ctx, target, llm) {
+  const provider = target?.modelProvider
+  if (!provider) return undefined
+  try {
+    const mounted = await llm?.listProviders?.()
+    const ids = new Set((Array.isArray(mounted) ? mounted : []).map((entry) => entry?.id).filter(Boolean))
+    if (ids.has(provider)) return provider
+    const mountedAs = mountedRouteFor(ctx, PRESETS[target.preset])
+    if (mountedAs && ids.has(mountedAs)) return mountedAs
+  } catch {}
+  return provider
+}
+
+/** The effective route config of one provider, as the llm-pi-ai row holds it. */
+function routeConfigOf(ctx, provider) {
+  const found = modelRouteRow(ctx)
+  const providers = found?.entry?.options?.config?.providers
+  const route = providers && typeof providers === 'object' ? providers[provider] : undefined
+  return { found, route: route && typeof route === 'object' ? route : undefined }
+}
+
+/** What the Models page would list for one provider, flattened to what the page draws. */
+async function listModels(llm, provider) {
+  const models = await llm.listModels(provider)
+  return (Array.isArray(models) ? models : [])
+    .filter((model) => model && typeof model.id === 'string' && model.id !== '')
+    .map((model) => ({
+      id: model.id,
+      name: typeof model.name === 'string' && model.name !== '' ? model.name : model.id,
+      ...(Number.isFinite(model.contextWindow) ? { contextWindow: model.contextWindow } : {}),
+      ...(Number.isFinite(model.maxTokens) ? { maxTokens: model.maxTokens } : {}),
+    }))
+}
+
+/**
+ * The rows to edit: the configured list when there is one, else the catalog the
+ * route currently serves, written out. Editing a catalog route narrows it —
+ * that is what "delete a model" means in `llm-pi-ai.providers`.
+ */
+async function effectiveModelRows(ctx, llm, provider) {
+  const { route } = routeConfigOf(ctx, provider)
+  if (Array.isArray(route?.models) && route.models.length > 0) return route.models.map((model) => ({ ...model }))
+  const models = await listModels(llm, provider).catch(() => [])
+  return models.map((model) => ({ id: model.id, ...(model.name && model.name !== model.id ? { name: model.name } : {}) }))
+}
+
+/** Replace one route's model list in the profile patch. */
+async function writeRouteModels(ctx, provider, models) {
+  const found = modelRouteRow(ctx)
+  if (!found) throw new Error('this profile keeps no llm-pi-ai row, so models cannot be edited here')
+  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+    const base = { ...inherited, ...current }
+    const providers = { ...(base.providers ?? {}) }
+    const route = { ...(providers[provider] ?? {}) }
+    route.models = models.map((model) => ({ ...model }))
+    providers[provider] = route
+    return { ...base, providers }
+  })
 }
 
 /**

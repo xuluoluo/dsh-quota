@@ -31,6 +31,8 @@ export const PRESETS = Object.freeze({
     apiKeyEnv: 'OPENCODE_GO_API_KEY',
     keysUrl: 'https://opencode.ai/auth',
     baseURL: 'https://opencode.ai/zen/go',
+    /** pi-ai already mounts this provider: its catalog supplies the models. */
+    model: { provider: 'opencode-go', kind: 'catalog' },
   },
   'xai-billing': {
     label: 'Grok',
@@ -38,6 +40,7 @@ export const PRESETS = Object.freeze({
     record: 'llm-pi-ai/xai',
     login: 'xai-device-code',
     baseURL: 'https://cli-chat-proxy.grok.com/v1',
+    model: { provider: 'xai', kind: 'catalog', oauth: true },
   },
   commandcode: {
     label: 'Command Code',
@@ -47,6 +50,8 @@ export const PRESETS = Object.freeze({
     baseURL: 'https://api.commandcode.ai',
     /** The Command Code CLI's own sign-in, read when no key is stored. */
     cliAuth: '.commandcode/auth.json',
+    /** No pi-ai provider and no OpenAI-compatible chat endpoint: quota only. */
+    model: null,
   },
   'deepseek-api': {
     label: 'DeepSeek API',
@@ -54,6 +59,7 @@ export const PRESETS = Object.freeze({
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     keysUrl: 'https://platform.deepseek.com/api_keys',
     baseURL: 'https://api.deepseek.com',
+    model: { provider: 'deepseek', kind: 'catalog' },
   },
   bailian: {
     label: 'Alibaba Bailian',
@@ -74,6 +80,7 @@ export const PRESETS = Object.freeze({
      * models it serves (ids read from
      * `GET https://dashscope.aliyuncs.com/compatible-mode/v1/models`).
      */
+    model: { provider: 'bailian', kind: 'route' },
     route: {
       api: 'openai-completions',
       baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',

@@ -22,9 +22,15 @@ window.__ModuleLoader__.load({
       predict: '/quota/predict',
       providers: '/quota/providers',
       providersRemove: '/quota/providers/remove',
+      providersAttach: '/quota/providers/attach',
+      providerModels: '/quota/provider/models',
+      providerModelsDiscover: '/quota/provider/models/discover',
+      providerModelsAdd: '/quota/provider/models/add',
+      providerModelsRemove: '/quota/provider/models/remove',
       loginStart: '/quota/login/start',
       loginStatus: '/quota/login/status',
       loginCancel: '/quota/login/cancel',
+      workspace: '/quota/workspace',
     }
     var REQUEST_TIMEOUT_MS = 30000
     var LOGIN_POLL_MS = 2500
@@ -38,7 +44,7 @@ window.__ModuleLoader__.load({
       refreshing: '刷新中…',
       updated: '更新于 ',
       disabled: '额度页已在设置里关闭（enabled: false）',
-      empty: '没有配置要盯的 provider',
+      empty: '还没有供应商：点上面的「+ 添加供应商」挑一家，模型与额度会一起接上',
       stale: '显示的是上一次的结果',
       missingCredential: '缺凭据',
       missingHint: '在下面保存 API key，或先登录这个 provider。',
@@ -103,19 +109,46 @@ window.__ModuleLoader__.load({
       uFrom: '统计自每次调用返回的 usage',
       // 供应商
       addTitle: '添加供应商',
-      addHint: '写进 profile 的 cordis.patch.yml，重启也还在；同一个预设可以加多个（不同网关 / 不同 key）。',
-      addPreset: '预设',
-      addId: 'id（唯一，字母数字与横线）',
+      addHint: '写进 profile 的 cordis.patch.yml，重启也还在；模型路由会一起写好，加完就能在模型里选。',
+      addPreset: '供应商',
       addLabel: '显示名（可选）',
       addBase: '网关地址（可选）',
       addKeyEnv: '凭据引用（可选，如 MY_KEY）',
+      addKey: 'API key（可选，也可以稍后在卡片里填）',
+      addAdvanced: '高级（网关 / 凭据引用）',
+      addOauthHint: 'Grok 走登录：加完在卡片里点「登录」即可。',
+      addOauthKind: '登录',
+      addPresetEmpty: '所有供应商都已经在页面上了。',
+      addAdvancedHint: '只有自定义网关才需要填；凭据引用留空就用预设的。',
       addSubmit: '添加',
       adding: '添加中…',
       providersUnit: '个供应商',
       added: '已添加',
       remove: '移除',
       removeFailed: '移除失败',
-      needId: '先填 id',
+      modelReady: '已接入模型',
+      modelMissing: '未接入模型',
+      attachModel: '接入模型',
+      attaching: '接入中…',
+      attachDone: '已接入模型选择器',
+      quotaOnly: '仅额度',
+      quotaOnlyHint: '这家没有可用的模型接口，只在这里盯额度。',
+      modelMissingHint: '这家的模型路由没有挂上（llm-pi-ai 里没有对应条目），模型选择器里看不到它。',
+      // 模型清单
+      modelsTitle: '模型',
+      modelsFetch: '获取模型',
+      modelsFetching: '获取中…',
+      modelsFetchFailed: '没取到模型列表',
+      modelsAdd: '添加模型',
+      modelsAddId: '模型 id（如 deepseek-v4.1-flash）',
+      modelsAddName: '显示名（可选）',
+      modelsCancel: '取消',
+      modelsSave: '加入',
+      modelsRemove: '删除',
+      modelsEmpty: '这家还没有列出模型',
+      modelsHint: '改过之后这条路由的模型列表就固定下来了（不再跟随 pi-ai 目录）。',
+      modelsCandidates: '厂商说它有这些：',
+      modelsNothingNew: '厂商列出的模型都已经在清单里了。',
       noQuota: '这家没有公开的额度接口：这张卡只负责把 key 存进 DSH 凭据库，token 用量看上面的「用量」。',
       testKey: '测试',
       testing: '测试中…',
@@ -143,6 +176,10 @@ window.__ModuleLoader__.load({
       predictSave: '保存',
       predictSaved: '已保存',
       predictFee: '预测也是一次真实的模型调用，会计入上面的用量。',
+      // 工作区
+      folderChip: '打开的文件夹',
+      branchChip: '当前分支',
+      noBranch: '不在 git 仓库里',
     }
 
     var en = {
@@ -153,7 +190,7 @@ window.__ModuleLoader__.load({
       refreshing: 'Refreshing…',
       updated: 'Updated ',
       disabled: 'This page is turned off in settings (enabled: false)',
-      empty: 'No provider is being watched',
+      empty: 'No providers yet: press “+ Add a provider” above — its models and allowance are wired together',
       stale: 'showing the previous result',
       missingCredential: 'No credential',
       missingHint: 'Store an API key below, or sign in to this provider.',
@@ -216,19 +253,45 @@ window.__ModuleLoader__.load({
       uEmpty: 'No usage yet: counting starts at the next model call',
       uFrom: 'from the usage each call reports',
       addTitle: 'Add a provider',
-      addHint: 'Written into the profile cordis.patch.yml, so it survives a restart. One preset can be added more than once (another gateway, another key).',
-      addPreset: 'Preset',
-      addId: 'id (unique; letters, digits, dashes)',
+      addHint: 'Written into the profile cordis.patch.yml, so it survives a restart. The model route is written with it, so the provider shows up in the model selector.',
+      addPreset: 'Provider',
       addLabel: 'Label (optional)',
       addBase: 'Gateway URL (optional)',
       addKeyEnv: 'Credential reference (optional, e.g. MY_KEY)',
+      addKey: 'API key (optional; the card can store it later)',
+      addAdvanced: 'Advanced (gateway / credential reference)',
+      addOauthHint: 'Grok signs in: add it, then press Sign in on its card.',
+      addOauthKind: 'sign in',
+      addPresetEmpty: 'Every provider is already on the page.',
+      addAdvancedHint: 'Only for a custom gateway; leave the reference empty to use the preset one.',
       addSubmit: 'Add',
       adding: 'Adding…',
       providersUnit: 'providers',
       added: 'Added',
       remove: 'Remove',
       removeFailed: 'Removing failed',
-      needId: 'Enter an id first',
+      modelReady: 'models ready',
+      modelMissing: 'models missing',
+      attachModel: 'Connect models',
+      attaching: 'Connecting…',
+      attachDone: 'The model selector can see it now',
+      quotaOnly: 'quota only',
+      quotaOnlyHint: 'This vendor has no usable chat endpoint; the card only tracks allowance.',
+      modelMissingHint: 'No llm-pi-ai entry matches this provider, so the model selector does not list it.',
+      modelsTitle: 'Models',
+      modelsFetch: 'Fetch models',
+      modelsFetching: 'Fetching…',
+      modelsFetchFailed: 'The model listing failed',
+      modelsAdd: 'Add model',
+      modelsAddId: 'Model id (e.g. deepseek-v4.1-flash)',
+      modelsAddName: 'Display name (optional)',
+      modelsCancel: 'Cancel',
+      modelsSave: 'Add',
+      modelsRemove: 'Remove',
+      modelsEmpty: 'This route lists no models yet',
+      modelsHint: 'Editing fixes this route’s model list (it stops following the pi-ai catalog).',
+      modelsCandidates: 'The vendor lists these:',
+      modelsNothingNew: 'Every model the vendor lists is already here.',
       noQuota: 'No public allowance endpoint: this card only stores the key in the DSH credential store. Token usage is under Usage above.',
       testKey: 'Test',
       testing: 'Testing…',
@@ -256,6 +319,9 @@ window.__ModuleLoader__.load({
       predictSave: 'Save',
       predictSaved: 'Saved',
       predictFee: 'A prediction is a real model call, so it counts in the usage above.',
+      folderChip: 'Working folder',
+      branchChip: 'Branch',
+      noBranch: 'Not a git repository',
     }
 
     // —— 主题令牌：只用 DSH 自己公布的别名 ——
@@ -834,6 +900,224 @@ window.__ModuleLoader__.load({
         h('button', { type: 'button', style: buttonQuiet, onClick: props.onCancel }, t('cancel'))))
     }
 
+    // —— 一家的模型清单：看 / 获取 / 加 / 删 ——
+    /**
+     * 模型列表写的还是 `llm-pi-ai.providers[provider].models`，所以这里加删的
+     * 就是模型选择器里看到的那份。默认收起：额度页先回答「还剩多少」。
+     */
+    function ModelList(props) {
+      var t = props.t
+      var card = props.card
+      var openPair = React.useState(false)
+      var open = openPair[0]
+      var modelsPair = React.useState(null)
+      var models = modelsPair[0]
+      var busyPair = React.useState('')
+      var busy = busyPair[0]
+      var candidatesPair = React.useState(null)
+      var candidates = candidatesPair[0]
+      var draftPair = React.useState({ id: '', name: '' })
+      var draft = draftPair[0]
+      var addingPair = React.useState(false)
+      var adding = addingPair[0]
+      var errorPair = React.useState('')
+      var error = errorPair[0]
+
+      function setError(value) { errorPair[1](value) }
+
+      function load() {
+        return request(ROUTES.providerModels + '?id=' + encodeURIComponent(card.id))
+          .then(function (body) {
+            if (!body) return
+            if (Array.isArray(body.models)) modelsPair[1](body.models)
+            setError(body.ok === false ? String(body.error || '') : '')
+          })
+          .catch(function (failure) {
+            setError(failure instanceof Error ? failure.message : String(failure))
+          })
+      }
+
+      // 换了模型路由就重新取：卡片的 id 不变，但它指向的 provider 可能变了。
+      React.useEffect(function () {
+        modelsPair[1](null)
+        candidatesPair[1](null)
+        errorPair[1]('')
+      }, [card.modelProvider])
+
+      React.useEffect(function () {
+        if (open && models === null) void load()
+      }, [open, card.id])
+
+      function editDraft(key, value) {
+        draftPair[1](function (previous) {
+          var next = Object.assign({}, previous)
+          next[key] = value
+          return next
+        })
+      }
+
+      function discover() {
+        busyPair[1]('discover')
+        setError('')
+        postJson(ROUTES.providerModelsDiscover, { id: card.id })
+          .then(function (body) {
+            if (body && body.ok === false) {
+              setError(String(body.error || t('modelsFetchFailed')))
+              return
+            }
+            candidatesPair[1](Array.isArray(body && body.models) ? body.models : [])
+          })
+          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
+          .finally(function () { busyPair[1]('') })
+      }
+
+      function addModel(model) {
+        var id = String((model && model.id) || '').trim()
+        if (id === '') return
+        busyPair[1]('add:' + id)
+        setError('')
+        postJson(ROUTES.providerModelsAdd, { id: card.id, model: { id: id, name: model.name } })
+          .then(function (body) {
+            if (Array.isArray(body && body.models)) modelsPair[1](body.models)
+            if (candidates) {
+              candidatesPair[1](candidates.filter(function (item) { return item.id !== id }))
+            }
+            draftPair[1]({ id: '', name: '' })
+            addingPair[1](false)
+            if (props.onChanged) props.onChanged()
+          })
+          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
+          .finally(function () { busyPair[1]('') })
+      }
+
+      function removeModel(model) {
+        busyPair[1]('remove:' + model.id)
+        setError('')
+        postJson(ROUTES.providerModelsRemove, { id: card.id, modelId: model.id })
+          .then(function (body) {
+            if (Array.isArray(body && body.models)) modelsPair[1](body.models)
+            if (props.onChanged) props.onChanged()
+          })
+          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
+          .finally(function () { busyPair[1]('') })
+      }
+
+      if (!card.modelProvider || card.inModels === false) return null
+
+      var known = models || []
+      var loaded = models !== null
+      var missing = (candidates || []).filter(function (item) {
+        return item && typeof item.id === 'string' && !known.some(function (model) { return model.id === item.id })
+      })
+      var smallButton = Object.assign({}, buttonQuiet, { fontSize: '11px', padding: '1px 7px' })
+
+      return h('div', { 'data-dsh-quota-models': card.id, style: { borderTop: '1px solid ' + C.border, paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+          h('button', {
+            type: 'button',
+            style: Object.assign({}, buttonQuiet, { padding: '1px 4px' }),
+            onClick: function () {
+              var next = !open
+              openPair[1](next)
+              // 展开就取一次；不依赖 effect，收起再展开也能立刻有数。
+              if (next && models === null) void load()
+            },
+          }, (open ? '▾ ' : '▸ ') + t('modelsTitle') + (loaded ? ' · ' + known.length : '')),
+          h('span', { style: { flex: '1' } }),
+          h('button', {
+            type: 'button',
+            style: smallButton,
+            disabled: busy !== '',
+            onClick: discover,
+          }, busy === 'discover' ? t('modelsFetching') : t('modelsFetch')),
+          h('button', {
+            type: 'button',
+            style: smallButton,
+            disabled: busy !== '',
+            onClick: function () { addingPair[1](!adding) },
+          }, adding ? t('modelsCancel') : t('modelsAdd'))),
+
+        open
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+            error ? h('div', { style: { fontSize: '11px', color: C.error, lineHeight: '16px' } }, error) : null,
+
+            !loaded
+              ? h('div', { style: { fontSize: '11px', color: C.minor } }, '…')
+              : known.length === 0
+                ? h('div', { style: { fontSize: '11px', color: C.minor } }, t('modelsEmpty'))
+                : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                  known.map(function (model) {
+                    var removing = busy === 'remove:' + model.id
+                    return h('div', {
+                      key: model.id,
+                      style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: '0' },
+                    },
+                    h('span', {
+                      style: { fontSize: '12px', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                    }, model.name || model.id),
+                    model.name && model.name !== model.id
+                      ? h('code', { style: { fontSize: '10px', color: C.minor, fontFamily: 'ui-monospace, monospace' } }, model.id)
+                      : null,
+                    h('span', { style: { flex: '1' } }),
+                    h('button', {
+                      type: 'button',
+                      style: smallButton,
+                      disabled: busy !== '',
+                      onClick: function () { removeModel(model) },
+                    }, removing ? '…' : t('modelsRemove')))
+                  })),
+
+            adding
+              ? h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
+                h('input', {
+                  value: draft.id,
+                  placeholder: t('modelsAddId'),
+                  onChange: function (event) { editDraft('id', event.target.value) },
+                  style: Object.assign({}, field, { flex: '1', minWidth: '200px' }),
+                }),
+                h('input', {
+                  value: draft.name,
+                  placeholder: t('modelsAddName'),
+                  onChange: function (event) { editDraft('name', event.target.value) },
+                  style: Object.assign({}, field, { width: '150px' }),
+                }),
+                h('button', {
+                  type: 'button',
+                  style: Object.assign({}, smallButton, busy !== '' || draft.id.trim() === '' ? disabledStyle : {}),
+                  disabled: busy !== '' || draft.id.trim() === '',
+                  onClick: function () { addModel({ id: draft.id, name: draft.name }) },
+                }, t('modelsSave')))
+              : null,
+
+            candidates !== null
+              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                h('div', { style: { fontSize: '11px', color: C.minor } }, t('modelsCandidates')),
+                missing.length === 0
+                  ? h('div', { style: { fontSize: '11px', color: C.minor } }, t('modelsNothingNew'))
+                  : missing.map(function (item) {
+                    var working = busy === 'add:' + item.id
+                    return h('div', {
+                      key: item.id,
+                      style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: '0' },
+                    },
+                    h('span', {
+                      style: { fontSize: '12px', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                    }, item.name || item.id),
+                    h('code', { style: { fontSize: '10px', color: C.minor, fontFamily: 'ui-monospace, monospace' } }, item.id),
+                    h('span', { style: { flex: '1' } }),
+                    h('button', {
+                      type: 'button',
+                      style: smallButton,
+                      disabled: busy !== '',
+                      onClick: function () { addModel(item) },
+                    }, working ? '…' : t('modelsSave')))
+                  }))
+              : null,
+
+            h('div', { style: { fontSize: '10px', color: C.minor, lineHeight: '15px' } }, t('modelsHint')))
+          : null)
+    }
+
     function Card(props) {
       var t = props.t
       var card = props.card
@@ -858,6 +1142,29 @@ window.__ModuleLoader__.load({
             background: C.surface2, borderRadius: '4px', padding: '1px 5px',
           },
         }, card.id),
+        card.modelProvider && card.inModels !== null
+          ? h('span', {
+            title: card.inModels === false ? t('modelMissingHint') : '',
+            style: {
+              fontSize: '10px', borderRadius: '4px', padding: '1px 5px',
+              color: card.inModels === false ? C.warn : C.minor,
+              border: '1px solid ' + (card.inModels === false ? C.warn : C.border),
+            },
+          }, card.inModels === false ? t('modelMissing') : t('modelReady'))
+          : !card.modelProvider && card.modelReason === 'quota-only'
+            ? h('span', {
+              title: t('quotaOnlyHint'),
+              style: { fontSize: '10px', borderRadius: '4px', padding: '1px 5px', color: C.minor, border: '1px solid ' + C.border },
+            }, t('quotaOnly'))
+            : null,
+        card.inModels === false && card.modelProvider
+          ? h('button', {
+            type: 'button',
+            style: Object.assign({}, buttonQuiet, { fontSize: '11px', padding: '1px 7px' }),
+            disabled: Boolean(props.busy),
+            onClick: props.onAttach,
+          }, props.busy ? t('attaching') : t('attachModel'))
+          : null,
         card.plan
           ? h('span', { style: { fontSize: '11px', color: C.brand, border: '1px solid ' + C.brand, borderRadius: '999px', padding: '0 6px' } }, t('plan') + ' · ' + card.plan)
           : null,
@@ -911,6 +1218,8 @@ window.__ModuleLoader__.load({
         ? h('div', { style: { fontSize: '12px', color: C.error, lineHeight: '18px' } },
           (card.missing ? t('missingCredential') + ' — ' + t('missingHint') + ' ' : '') + card.error)
         : null,
+
+      h(ModelList, { t: t, card: card, onChanged: props.onChanged }),
 
       h('div', { style: { borderTop: '1px solid ' + C.border, paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' } },
         h('div', { style: { fontSize: '11px', color: C.minor, textTransform: 'uppercase', letterSpacing: '.04em' } },
@@ -1075,39 +1384,48 @@ window.__ModuleLoader__.load({
     function AddProvider(props) {
       var t = props.t
       var presets = Array.isArray(props.presets) ? props.presets : []
+      var taken = props.taken || {}
+      // A vendor already on the page is not offered twice: one card per
+      // provider keeps the quota numbers from repeating themselves.
+      var open = presets.filter(function (preset) { return !taken[preset.id] })
       var presetState = React.useState('')
-      var draftState = React.useState({ id: '', label: '', baseURL: '', apiKeyEnv: '' })
+      var draftState = React.useState({ label: '', key: '', baseURL: '', apiKeyEnv: '' })
       var busyState = React.useState(false)
       var errorState = React.useState('')
+      var advancedState = React.useState(false)
       var chosen = presetState[0]
       var draft = draftState[0]
       var busy = busyState[0]
       var error = errorState[0]
-      var active = chosen || (presets[0] ? presets[0].id : '')
+      var advanced = advancedState[0]
+      var active = chosen || (open[0] ? open[0].id : '')
+      var preset = null
+      for (var p = 0; p < presets.length; p += 1) if (presets[p].id === active) preset = presets[p]
 
       function edit(key, value) {
-        var next = Object.assign({}, draft)
-        next[key] = value
-        draftState[1](next)
+        // 函数式更新：连续敲两格时，后一次不会把前一次的字盖掉。
+        draftState[1](function (previous) {
+          var next = Object.assign({}, previous)
+          next[key] = value
+          return next
+        })
       }
 
       function submit() {
-        var id = (draft.id || '').trim()
-        if (id === '') {
-          errorState[1](t('needId'))
+        if (!preset) {
+          errorState[1](t('addPresetEmpty'))
           return
         }
         busyState[1](true)
         errorState[1]('')
-        postJson(ROUTES.providers, {
-          preset: active,
-          id: id,
-          label: draft.label,
-          baseURL: draft.baseURL,
-          apiKeyEnv: draft.apiKeyEnv,
-        })
+        var body = { preset: active, label: (draft.label || '').trim(), key: (draft.key || '').trim() }
+        if (advanced) {
+          body.baseURL = draft.baseURL
+          body.apiKeyEnv = draft.apiKeyEnv
+        }
+        postJson(ROUTES.providers, body)
           .then(function () {
-            draftState[1]({ id: '', label: '', baseURL: '', apiKeyEnv: '' })
+            draftState[1]({ label: '', key: '', baseURL: '', apiKeyEnv: '' })
             errorState[1]('')
             if (props.onClose) props.onClose()
             props.onChanged()
@@ -1124,55 +1442,78 @@ window.__ModuleLoader__.load({
       return h('section', {
         style: {
           border: '1px solid ' + C.border, background: C.surface, borderRadius: '14px',
-          padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px',
+          padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px',
         },
       },
-      h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px' } },
+      h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' } },
         h('h3', { style: { margin: 0, fontSize: '13px', fontWeight: '500', color: C.text } }, t('addTitle')),
         h('span', { style: { fontSize: '11px', color: C.minor } }, t('addHint'))),
-      h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
-        h('select', {
-          value: active,
-          onChange: function (event) { presetState[1](event.target.value) },
-          style: Object.assign({}, field, { minWidth: '150px' }),
-        }, presets.map(function (preset) {
-          return h('option', { key: preset.id, value: preset.id }, preset.label)
-        })),
-        h('input', {
-          value: draft.id,
-          placeholder: t('addId'),
-          onChange: function (event) { edit('id', event.target.value) },
-          style: Object.assign({}, field, { width: '160px' }),
-        }),
-        h('input', {
-          value: draft.label,
-          placeholder: t('addLabel'),
-          onChange: function (event) { edit('label', event.target.value) },
-          style: Object.assign({}, field, { width: '140px' }),
-        }),
-        h('input', {
-          value: draft.baseURL,
-          placeholder: t('addBase'),
-          onChange: function (event) { edit('baseURL', event.target.value) },
-          style: Object.assign({}, field, { flex: '1', minWidth: '160px' }),
-        }),
-        h('input', {
-          value: draft.apiKeyEnv,
-          placeholder: t('addKeyEnv'),
-          onChange: function (event) { edit('apiKeyEnv', event.target.value) },
-          style: Object.assign({}, field, { width: '170px' }),
-        }),
-        h('button', {
-          type: 'button',
-          style: Object.assign({}, buttonPrimary, busy ? disabledStyle : {}),
-          disabled: busy,
-          onClick: submit,
-        }, busy ? t('adding') : t('addSubmit')),
-        h('button', {
-          type: 'button',
-          style: buttonQuiet,
-          onClick: function () { if (props.onClose) props.onClose() },
-        }, t('cancel'))),
+
+      open.length === 0
+        ? h('div', { style: { fontSize: '12px', color: C.minor } }, t('addPresetEmpty'))
+        : h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
+          h('select', {
+            value: active,
+            onChange: function (event) { presetState[1](event.target.value) },
+            style: Object.assign({}, field, { minWidth: '210px' }),
+          }, open.map(function (item) {
+            var kind = item.auth === 'oauth' ? t('addOauthKind') : 'API key'
+            var models = item.addsModels ? '' : ' · ' + t('quotaOnly')
+            return h('option', { key: item.id, value: item.id }, item.label + ' · ' + kind + models)
+          })),
+          h('input', {
+            value: draft.label,
+            placeholder: t('addLabel'),
+            onChange: function (event) { edit('label', event.target.value) },
+            style: Object.assign({}, field, { width: '170px' }),
+          }),
+          preset && preset.auth === 'key'
+            ? h('input', {
+              type: 'password',
+              value: draft.key,
+              placeholder: t('addKey'),
+              autoComplete: 'off',
+              spellCheck: false,
+              onChange: function (event) { edit('key', event.target.value) },
+              style: Object.assign({}, field, { flex: '1', minWidth: '220px' }),
+            })
+            : h('span', { style: { fontSize: '11px', color: C.minor, flex: '1', minWidth: '200px' } }, t('addOauthHint')),
+          h('button', {
+            type: 'button',
+            style: Object.assign({}, buttonPrimary, busy || !preset ? disabledStyle : {}),
+            disabled: busy || !preset,
+            onClick: submit,
+          }, busy ? t('adding') : t('addSubmit')),
+          h('button', {
+            type: 'button',
+            style: buttonQuiet,
+            onClick: function () { if (props.onClose) props.onClose() },
+          }, t('cancel'))),
+
+      open.length === 0
+        ? null
+        : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+          h('button', {
+            type: 'button',
+            style: Object.assign({}, buttonQuiet, { alignSelf: 'flex-start' }),
+            onClick: function () { advancedState[1](!advanced) },
+          }, t('addAdvanced')),
+          advanced
+            ? h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+              h('input', {
+                value: draft.baseURL,
+                placeholder: t('addBase'),
+                onChange: function (event) { edit('baseURL', event.target.value) },
+                style: Object.assign({}, field, { flex: '1', minWidth: '240px' }),
+              }),
+              h('input', {
+                value: draft.apiKeyEnv,
+                placeholder: t('addKeyEnv'),
+                onChange: function (event) { edit('apiKeyEnv', event.target.value) },
+                style: Object.assign({}, field, { width: '240px' }),
+              }),
+              h('span', { style: { fontSize: '11px', color: C.minor, flex: '1', minWidth: '200px' } }, t('addAdvancedHint')))
+            : null),
       error ? h('div', { style: { fontSize: '11px', color: C.error } }, error) : null)
     }
 
@@ -1276,6 +1617,16 @@ window.__ModuleLoader__.load({
       function onClear(card) {
         void run(card.id, postJson(ROUTES.clear, { id: card.id }))
       }
+      function onAttach(card) {
+        setWorking(card.id)
+        postJson(ROUTES.providersAttach, { id: card.id })
+          .then(function () {
+            setNotice(card.id, { text: t('attachDone') })
+            return store.refresh()
+          })
+          .catch(function (error) { noticeError(card.id, error) })
+          .finally(function () { setWorking('') })
+      }
       function onRemove(card) {
         var next = Object.assign({}, logins)
         delete next[card.id]
@@ -1306,6 +1657,9 @@ window.__ModuleLoader__.load({
         setLogins(next)
         postJson(ROUTES.loginCancel, { id: card.id }).catch(function () {})
       }
+
+      var taken = {}
+      cards.forEach(function (card) { if (card && typeof card.preset === 'string') taken[card.preset] = card.id })
 
       return h('section', { style: { display: 'flex', flexDirection: 'column', gap: '14px', maxWidth: '760px' } },
         h('header', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
@@ -1350,6 +1704,7 @@ window.__ModuleLoader__.load({
                 key: 'add',
                 t: t,
                 presets: data && data.presets,
+                taken: taken,
                 onChanged: function () { void store.refresh() },
                 onClose: function () { setAdding(false) },
               })
@@ -1384,6 +1739,8 @@ window.__ModuleLoader__.load({
                   onSignOut: function () { onSignOut(card) },
                   onCancelLogin: function () { onCancelLogin(card) },
                   onRemove: function () { onRemove(card) },
+                  onAttach: function () { onAttach(card) },
+                  onChanged: function () { void store.refresh() },
                   login: logins[card.id] || card.login,
                   notice: notices[card.id],
                 })
@@ -1568,6 +1925,74 @@ window.__ModuleLoader__.load({
           : null)
     }
 
+    // —— 工作区：composer 左侧那两格 ——
+    /**
+     * 打开的文件夹，和它所在的 git 分支。会话一换就重新问；读不到就什么都不画，
+     * 输入框照常可用。文件夹名放在 title 里的是完整路径，分支那格写仓库根。
+     */
+    function WorkspaceChips(props) {
+      var t = props.t
+      var sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
+      var pair = React.useState(null)
+      var info = pair[0]
+      var setInfo = pair[1]
+
+      React.useEffect(function () {
+        if (sessionId === '') { setInfo(null); return undefined }
+        var abort = new AbortController()
+        function load() {
+          var url = new URL(ROUTES.workspace.replace(/^\//, '') + '?sessionId=' + encodeURIComponent(sessionId), document.baseURI)
+          fetch(url, { credentials: 'same-origin', signal: abort.signal, headers: { accept: 'application/json' } })
+            .then(function (response) { return response.json().catch(function () { return null }) })
+            .then(function (body) {
+              if (abort.signal.aborted) return
+              if (body && typeof body.root === 'string' && body.root !== '') setInfo(body)
+            })
+            .catch(function () {})
+        }
+        load()
+        var timer = setInterval(load, 15000)
+        return function () {
+          abort.abort()
+          clearInterval(timer)
+        }
+      }, [sessionId])
+
+      if (!info) return null
+
+      var chip = {
+        display: 'inline-flex', alignItems: 'center', gap: '4px', height: '22px',
+        padding: '0 7px', borderRadius: '6px', background: C.surface2, color: C.minor,
+        fontSize: '11px', lineHeight: '22px', maxWidth: '190px', minWidth: '0',
+      }
+      var label = { overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }
+
+      var folder = h('span', {
+        title: t('folderChip') + '\n' + info.root,
+        style: chip,
+      },
+      h('svg', { width: 12, height: 12, viewBox: '0 0 12 12', fill: 'none', stroke: 'currentColor', strokeWidth: 1.1, 'aria-hidden': true },
+        h('path', { d: 'M1.4 3.1c0-.4.3-.7.7-.7h2.1l1 1h4.7c.4 0 .7.3.7.7v4.8c0 .4-.3.7-.7.7H2.1a.7.7 0 0 1-.7-.7z' })),
+      h('span', { style: label }, info.name || info.root))
+
+      var branch = info.branch
+        ? h('span', {
+          title: t('branchChip') + '\n' + (info.gitRoot || info.root) + '\n' + info.branch,
+          style: chip,
+        },
+        h('svg', { width: 12, height: 12, viewBox: '0 0 12 12', fill: 'none', stroke: 'currentColor', strokeWidth: 1.1, 'aria-hidden': true },
+          h('circle', { cx: 3.2, cy: 2.6, r: 1.4 }),
+          h('circle', { cx: 8.8, cy: 9.2, r: 1.4 }),
+          h('path', { d: 'M3.2 4v1.3c0 1.1.9 2 2 2h1.6c.6 0 1 .4 1 1v.9' })),
+        h('span', { style: label }, info.branch))
+        : h('span', { title: t('noBranch'), style: Object.assign({}, chip, { color: C.idle }) }, t('noBranch'))
+
+      return h('div', {
+        'data-dsh-quota': 'workspace',
+        style: { display: 'inline-flex', alignItems: 'center', gap: '4px', minWidth: '0' },
+      }, folder, branch)
+    }
+
     // —— 注册 ——
     var inject = ['slots', 'locale']
 
@@ -1587,6 +2012,19 @@ window.__ModuleLoader__.load({
       var GhostEntry = function (props) {
         return h(PromptGhost, Object.assign({}, props, { t: t }))
       }
+      var WorkspaceEntry = function (props) {
+        return h(WorkspaceChips, Object.assign({}, props, { t: t }))
+      }
+
+      // composer 左侧：权限预设与 plan 之后，就是这两格。
+      ctx.effect(function () {
+        return ctx.slots.inject('conversation.input.left', function () {
+          return ctx.slots.register(
+            { name: 'conversation.input.left', id: 'quota-workspace', order: 20 },
+            WorkspaceEntry,
+          )
+        })
+      })
 
       ctx.effect(function () {
         return ctx.slots.inject('conversation.input.right', function () {

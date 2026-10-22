@@ -145,6 +145,8 @@ const cardBase = {
   label: 'OpenCode Go',
   preset: 'opencode-go',
   auth: 'key',
+  modelProvider: 'opencode-go',
+  inModels: true,
   keysUrl: 'https://opencode.ai/auth',
   windows: [
     { key: 'rolling', used: 2, resetsAt: '2026-10-20T06:45:48.000Z' },
@@ -184,16 +186,18 @@ const payload = {
   predict: { enabled: true, provider: '', model: '', systemPrompt: '', debounceMs: 700 },
   defaultPrompt: '你是一个输入预测器。只输出这一句话本身。',
   presets: [
-    { id: 'opencode-go', label: 'OpenCode Go', auth: 'key' },
-    { id: 'xai-billing', label: 'Grok', auth: 'oauth' },
-    { id: 'commandcode', label: 'Command Code', auth: 'key' },
-    { id: 'deepseek-api', label: 'DeepSeek API', auth: 'key' },
-    { id: 'bailian', label: 'Alibaba Bailian', auth: 'key' },
+    { id: 'opencode-go', label: 'OpenCode Go', auth: 'key', addsModels: true, modelProvider: 'opencode-go' },
+    { id: 'xai-billing', label: 'Grok', auth: 'oauth', addsModels: true, modelProvider: 'xai' },
+    { id: 'commandcode', label: 'Command Code', auth: 'key', addsModels: false, modelProvider: null },
+    { id: 'deepseek-api', label: 'DeepSeek API', auth: 'key', addsModels: true, modelProvider: 'deepseek' },
+    { id: 'bailian', label: 'Alibaba Bailian', auth: 'key', addsModels: true, modelProvider: 'bailian' },
+    { id: 'test-vendor', label: 'Test Vendor', auth: 'key', addsModels: true, modelProvider: 'test-vendor' },
   ],
   providers: [
     cardBase,
     {
       id: 'grok', label: 'Grok', preset: 'xai-billing', auth: 'oauth',
+      modelProvider: 'xai', inModels: true,
       windows: [{ key: 'weekly', used: 100, resetsAt: '2026-10-20T06:32:13.017Z' }],
       worst: { key: 'weekly', used: 100 },
       parts: [{ name: 'GrokBuild', used: 92 }, { name: 'Cursor', used: 5 }],
@@ -202,6 +206,7 @@ const payload = {
     },
     {
       id: 'commandcode', label: 'Command Code', preset: 'commandcode', auth: 'key',
+      modelProvider: null, inModels: false, modelReason: 'quota-only',
       keysUrl: 'https://commandcode.ai/settings/keys',
       plan: 'GOAT', until: '2026-10-22T11:40:10.000Z', renew: 'off',
       windows: [
@@ -215,6 +220,7 @@ const payload = {
     },
     {
       id: 'deepseek', label: 'DeepSeek API', preset: 'deepseek-api', auth: 'key',
+      modelProvider: 'deepseek', inModels: false, modelReason: 'not-mounted',
       keysUrl: 'https://platform.deepseek.com/api_keys',
       windows: [], worst: null,
       balance: '¥110.00', note: 'topped up ¥100.00 · granted ¥10.00',
@@ -239,8 +245,29 @@ let answer = (url, init) => {
   if (url.endsWith('/quota/test')) return { ok: true, detail: '178 models' }
   if (url.endsWith('/quota/suggest')) return { suggestion: '继续把测试补上' }
   if (url.endsWith('/quota/models')) return { groups: [{ provider: 'opencode-go', name: 'OpenCode Go', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] }] }
+  if (url.endsWith('/quota/provider/models/discover')) {
+    return { ok: true, models: [{ id: 'new-model', name: 'New Model' }, { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] }
+  }
+  if (url.endsWith('/quota/provider/models/add')) {
+    return { ok: true, models: [{ id: 'deepseek-v4.1-flash' }, { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }, { id: 'new-model', name: 'New Model' }] }
+  }
+  if (url.endsWith('/quota/provider/models/remove')) {
+    return { ok: true, models: [{ id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }] }
+  }
+  if (url.includes('/quota/provider/models?')) {
+    return { ok: true, provider: 'opencode-go', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }, { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }] }
+  }
   if (url.endsWith('/quota/providers')) return { ok: true }
   if (url.endsWith('/quota/providers/remove')) return { ok: true }
+  if (url.includes('/quota/workspace')) {
+    return {
+      root: 'D:\\Documents\\deepseek-harness\\default-workspace',
+      name: 'default-workspace',
+      branch: 'feature/workspace-chips',
+      gitRoot: 'D:\\Documents\\deepseek-harness',
+      detached: false,
+    }
+  }
   return payload
 }
 
@@ -277,14 +304,26 @@ const ctx = {
 }
 mod.apply(ctx)
 
-check('注册了四个 slot', slots.length === 4 && slots.map((s) => s.spec.name).sort().join() === 'conversation.composer.dock,conversation.input.overlay,conversation.input.right,settings.section', JSON.stringify(slots.map((s) => s.spec.name)))
+check('注册了五个 slot', slots.length === 5 && slots.map((s) => s.spec.name).sort().join() === 'conversation.composer.dock,conversation.input.left,conversation.input.overlay,conversation.input.right,settings.section', JSON.stringify(slots.map((s) => s.spec.name)))
 const chipSlot = slots.find((s) => s.spec.name === 'conversation.input.right')
 const stripSlot = slots.find((s) => s.spec.name === 'conversation.composer.dock')
 const pageSlot = slots.find((s) => s.spec.name === 'settings.section')
+const workspaceSlot = slots.find((s) => s.spec.name === 'conversation.input.left')
 check('chip 挂在 conversation.input.right（list 槽，不抢模型选择器）', Boolean(chipSlot) && chipSlot.spec.id === 'quota-chip')
+check('工作区两格挂在 conversation.input.left', Boolean(workspaceSlot) && workspaceSlot.spec.id === 'quota-workspace')
 check('设置页挂在 settings.section 且有 label', Boolean(pageSlot) && typeof pageSlot.spec.label === 'function')
 check('窄条挂在 conversation.composer.dock', Boolean(stripSlot) && stripSlot.spec.id === 'quota-strip')
 check('中英字典都注册了', Boolean(dicts['settings.quota']?.zh?.title && dicts['settings.quota']?.en?.title))
+
+// —— 工作区：文件夹 + git 分支 ——
+mini.mount(workspaceSlot.component, { sessionId: 's1' })
+await tick()
+let wsTexts = textsOf(mini.tree)
+check('composer 左侧显示打开的文件夹', wsTexts.includes('default-workspace'), JSON.stringify(wsTexts))
+check('composer 左侧显示 git 分支', wsTexts.includes('feature/workspace-chips'), JSON.stringify(wsTexts))
+const folderChip = elements(mini.tree).find((node) => node.type === 'span' && String(node.props?.title ?? '').startsWith('打开的文件夹'))
+check('文件夹的 tooltip 是完整路径', Boolean(folderChip) && folderChip.props.title.includes('D:\\Documents\\deepseek-harness\\default-workspace'))
+check('取数带上了 sessionId', calls.some((call) => call.url.includes('/quota/workspace?sessionId=s1')), JSON.stringify(calls.slice(-3)))
 
 // —— chip ——
 check('首帧（还没取到数）不渲染', mini.mount(chipSlot.component) === null)
@@ -379,26 +418,38 @@ check('保存打了 /quota/key', Boolean(keyCall), JSON.stringify(calls.map((c) 
 check('保存把 key 原样（不带空白）发给 Host', keyCall && JSON.parse(keyCall.body).key === 'sk-test-123', keyCall?.body)
 check('保存带上 provider id', keyCall && JSON.parse(keyCall.body).id === 'opencode-go')
 
-// —— 添加供应商：列表上方一个按钮，点开才出表单 ——
+// —— 添加供应商：选厂商 + 贴 key，id 由 Host 从预设推出 ——
 const addToggle = elements(mini.tree).find((node) => node.type === 'button' && textsOf(node).join('').includes('添加供应商'))
 check('列表上方有「添加供应商」按钮', Boolean(addToggle), JSON.stringify(elements(mini.tree).filter((n) => n.type === 'button').map((n) => textsOf(n).join(''))))
-check('没点开时看不到表单',
-  !elements(mini.tree).some((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id')))
+check('没点开时看不到表单', !elements(mini.tree).some((node) => node.type === 'select'))
 addToggle.props.onClick()
 await tick()
-const idField = elements(mini.tree).find((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id'))
-check('点开后出现表单', Boolean(idField))
-idField.props.onChange({ target: { value: 'my-oc' } })
+const presetSelect = elements(mini.tree).find((node) => node.type === 'select' && textsOf(node).join('').includes('Test Vendor'))
+check('点开后出现供应商下拉', Boolean(presetSelect))
+const optionTexts = textsOf(presetSelect).join('')
+check('已加过的厂商不再出现在下拉里', !optionTexts.includes('OpenCode Go') && optionTexts.includes('Test Vendor'), JSON.stringify(optionTexts))
+presetSelect.props.onChange({ target: { value: 'test-vendor' } })
+await tick()
+const labelField = elements(mini.tree).find((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('显示名'))
+const keyField = elements(mini.tree).find((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('API key'))
+check('表单只问显示名与 key，不再问 id / 网关 / 凭据引用',
+  Boolean(labelField) && Boolean(keyField) && !elements(mini.tree).some((node) => String(node.props?.placeholder ?? '').startsWith('id')),
+  JSON.stringify(elements(mini.tree).filter((n) => n.type === 'input').map((n) => n.props?.placeholder)))
+labelField.props.onChange({ target: { value: '测试厂商' } })
+await tick()
+keyField.props.onChange({ target: { value: ' sk-add ' } })
 await tick()
 const addButton = elements(mini.tree).find((node) => node.type === 'button' && textsOf(node).join('') === '添加')
-check('填了 id 之后添加按钮可用', Boolean(addButton))
-addButton.props.onClick()
+check('填完可以添加', Boolean(addButton))
+await addButton.props.onClick()
 await tick(80)
 const addCall = calls.find((call) => call.url.endsWith('/quota/providers'))
 check('添加打了 /quota/providers', Boolean(addCall), JSON.stringify(calls.map((call) => call.url)))
-check('添加带上预设与 id', addCall && JSON.parse(addCall.body).id === 'my-oc' && JSON.parse(addCall.body).preset === 'opencode-go', addCall?.body)
-check('添加成功后表单收起',
-  !elements(mini.tree).some((node) => node.type === 'input' && String(node.props?.placeholder ?? '').startsWith('id')))
+const addBody = addCall ? JSON.parse(addCall.body) : {}
+check('添加带上厂商、显示名与 key，没有 id',
+  addBody.preset === 'test-vendor' && addBody.label === '测试厂商' && addBody.key === 'sk-add' && addBody.id === undefined,
+  addCall?.body)
+check('添加成功后表单收起', !elements(mini.tree).some((node) => node.type === 'select'))
 
 // —— 成本、告警、测试连接 ——
 pageTexts = await openTab('用量')
@@ -406,6 +457,53 @@ check('用量区给出估算花费', pageTexts.join('').includes('≈') && pageT
 check('模型行也带花费', pageTexts.join('').includes('.013'))
 pageTexts = await openTab('额度')
 check('超过阈值时卡头挂告警', pageTexts.join('').includes('已达上限') && pageTexts.join('').includes('接近上限'))
+check('卡头写清模型接没接上', pageTexts.join('').includes('已接入模型') && pageTexts.join('').includes('仅额度'))
+const attachButton = findByText(mini.tree, '接入模型')
+check('未接入模型的卡有「接入模型」按钮', Boolean(attachButton))
+await attachButton.props.onClick()
+await tick(60)
+check('接入打了 /quota/providers/attach',
+  calls.some((call) => call.url.endsWith('/quota/providers/attach') && JSON.parse(call.body).id === 'deepseek'),
+  JSON.stringify(calls.map((call) => call.url).slice(-4)))
+check('接入成功后说了结果', textsOf(mini.tree).join('').includes('已接入模型选择器'))
+
+// —— 卡片里的模型清单：看 / 获取 / 加 / 删 ——
+const modelSection = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
+check('卡片里有模型清单且默认收起',
+  Boolean(modelSection) && !textsOf(modelSection).join('').includes('DeepSeek V4.1 Flash'),
+  JSON.stringify(textsOf(modelSection || {})))
+const modelsToggle = elements(modelSection).find((node) => node.type === 'button' && textsOf(node).join('').includes('模型'))
+await modelsToggle.props.onClick()
+await tick(60)
+let section = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
+check('展开后列出这家的模型',
+  textsOf(section).join('').includes('DeepSeek V4.1 Flash') && textsOf(section).join('').includes('GLM-5.3 Flash'),
+  JSON.stringify(textsOf(section)))
+check('取模型打了 GET', calls.some((call) => call.url.includes('/quota/provider/models?id=opencode-go')))
+
+const fetchButton = elements(section).find((node) => node.type === 'button' && textsOf(node).join('').includes('获取模型'))
+await fetchButton.props.onClick()
+await tick(60)
+section = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
+check('获取模型打了 discover',
+  calls.some((call) => call.url.endsWith('/quota/provider/models/discover') && JSON.parse(call.body).id === 'opencode-go'))
+check('候选里出现目录外的模型', textsOf(section).join('').includes('New Model'))
+
+const joinButton = elements(section).find((node) => node.type === 'button' && textsOf(node).join('') === '加入')
+check('候选后面有「加入」', Boolean(joinButton))
+await joinButton.props.onClick()
+await tick(80)
+check('加入打的是 add',
+  calls.some((call) => call.url.endsWith('/quota/provider/models/add') && JSON.parse(call.body).model.id === 'new-model'),
+  JSON.stringify(calls.slice(-3)))
+section = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
+const removeButton = elements(section).find((node) => node.type === 'button' && textsOf(node).join('') === '删除')
+check('每个模型后面有「删除」', Boolean(removeButton))
+await removeButton.props.onClick()
+await tick(80)
+check('删除打的是 remove',
+  calls.some((call) => call.url.endsWith('/quota/provider/models/remove') && JSON.parse(call.body).modelId === 'deepseek-v4.1-flash'),
+  JSON.stringify(calls.slice(-3)))
 
 const testButton = findByText(mini.tree, '测试')
 check('有「测试」按钮', Boolean(testButton))
@@ -454,7 +552,7 @@ check('已登录的卡才有退出登录', signOut === undefined)
 
 // —— 失败态：接口挂掉时 chip 显示 ! 而不是消失 ——
 answer = () => ({ ...payload, providers: [{ id: 'grok', label: 'Grok', auth: 'oauth', error: 'HTTP 401: Unauthorized', credential: { auth: 'oauth', configured: true } }] })
-mini.mount(slots[0].component)
+mini.mount(chipSlot.component)
 await tick()
 const failChip = byAttr(mini.tree, 'data-dsh-quota', 'chip')
 await failChip.props.onClick()

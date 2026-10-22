@@ -6,16 +6,24 @@ DSH 的模型选择器只告诉你「用哪个模型」，不告诉你「这个 
 `key_allowance.go`、`commandcode_plan.go`、`opencode_endpoints.go`）与它的 Usage 页，
 直接问厂商自己的接口，并把每次模型调用的 usage 记下来。
 
-界面上是四块：
+界面上是五块：
 
 1. **composer 下方的常驻窄条**（`conversation.composer.dock`）—— 不用打开设置就能看到
    `OpenCode Go 35% · Grok ⚠100% · 今日 ≈$0.42`；过阈值的那家带 ⚠，点一下刷新。
    **鼠标停在那家身上**会展开它的每一个窗口（`滚动窗口 · 2% · 重置 1h 12m`、`一周 · 19% …`、
    `一个月 · 33% …`），再加上套餐与余额 —— 用的是原生 `title`，不会被 composer 的 overflow 裁掉。
    composer 右侧那枚 chip 与它是同一份数字，**默认关掉**（`showChip: true` 才回来）；
-2. **设置 → 额度**（`settings.section` 里的 `quota` 页）—— 页内分三栏：**额度**（每个 provider 的卡片：窗口进度条最紧的排最前 + 重置倒计时 + 凭据区，含保存 / 清除 / 测试）、**用量**（四宫格 + 七天条带 + 模型明细，带估算花费）、**输入预测**（开关 / 模型 / 提示词）；
-3. 列表上方的 **+ 添加供应商** —— 写进 profile 的 `cordis.patch.yml`，重启还在；pi-ai 目录里
-   没有的供应商会顺手把模型路由也写上。
+2. **composer 左侧的两格**（`conversation.input.left`）—— 打开的是哪个文件夹、它在哪个 git
+   分支上（游离 HEAD 时是短哈希；不是仓库就写「不在 git 仓库里」）。文件夹那格的 `title` 是
+   完整路径，分支那格是仓库根 + 分支名；15 秒问一次 Host，会话一换就重新问；
+3. **设置 → 额度**（`settings.section` 里的 `quota` 页）—— 页内分三栏：**额度**（每个 provider 的卡片：窗口进度条最紧的排最前 + 重置倒计时 + 凭据区，含保存 / 清除 / 测试）、**用量**（四宫格 + 七天条带 + 模型明细，带估算花费）、**输入预测**（开关 / 模型 / 提示词）；
+4. 列表上方的 **+ 添加供应商** —— 选一家厂商、贴 key（Grok 是加完再登录），写进 profile 的
+   `cordis.patch.yml`，重启还在；**模型路由会一起写好**，所以加完就能在模型选择器里选到它；
+5. 卡片头上会写清这家有没有接进模型：`已接入模型` / `未接入模型` / `仅额度`（Command Code
+   没有可用的聊天接口，只在这里盯额度）。
+
+**没有默认供应商**：没配置就是空页，只有一句「还没有供应商」和添加入口 —— 凭空出现的卡片
+会让人以为模型选择器里也有它们。
 
 ## 一、额度从哪来
 
@@ -128,25 +136,49 @@ ali:
 
 ## 四、添加 / 移除供应商
 
-列表上方一个「+ 添加供应商」按钮：点开是预设 + `id` + 可选（显示名 / 网关地址 / 凭据引用）的表单，添加成功后自动收起。
-卡头右上角的「移除」做反向操作。
+列表上方一个「+ 添加供应商」按钮。点开只有三样：**厂商**、可选的显示名、可选的 API key
+（Grok 是加完在卡片里点登录）。不再问 `id` / 网关地址 / 凭据引用 —— 那些是给第二套网关
+准备的，收在「高级」里。添加成功后自动收起，`id` 由 Host 从预设推出（就是模型路由的名字）。
 
 写的是 **profile 自己的 patch 层**（`cordis.patch.yml` 里 id 为 `dsh-quota` 的那一行），
-不是插件内部的状态文件 —— 所以重启、升级都还在，也能被别的工具读到。第一次添加会把
-三个内置目标显式写下来（否则「写了 providers 就是整份替换」会把它们弄丢）。
+不是插件内部的状态文件 —— 所以重启、升级都还在，也能被别的工具读到。**没有内置供应商**：
+不配置就是空页，不会替用户初始化五张卡。
 
 现在有五种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、
-`deepseek-api`（只有余额）、`bailian`（只存 key）。
+`deepseek-api`（只有余额）、`bailian`（只存 key）。已经加过的厂商不再出现在下拉里。
 
-加了供应商还要能在**模型**里看见。pi-ai 目录里已经有的（`opencode-go` / `xai`）不需要做什么；
-目录里没有的（目前只有 `bailian`），预设里带了一份 `route`，添加时插件会顺手在
-`llm-pi-ai.providers` 写一条路由（`api` / `baseURL` / `models`），否则它只活在额度页、
-模型选择器里看不到。
+**添加时同时接模型**，这就是它和以前不一样的地方：
 
-**凭据引用填的是名字，不是 key**：`apiKeyEnv` 必须长成 `DASHSCOPE_API_KEY` 这样；
-填成 key 会被 400 拒掉，配置里要是已经写成 key 形状，读的时候会被丢掉、退回预设的引用
-（避免把 key 当引用带到页面上）。
-同一个预设可以加多次 —— 换网关、换 key、换账号都行。
+| 预设 | 模型侧 |
+|---|---|
+| `opencode-go` / `deepseek-api` | pi-ai 目录认识它们：只往 `llm-pi-ai.providers` 补一条 `apiKeyEnv`，模型目录原样保留 |
+| `xai-billing`（Grok） | 补 `xai: {}`，认证走登录记录（写 `apiKeyEnv` 会盖掉登录，所以不写） |
+| `bailian` | 目录里没有：写完整路由（`api` / `baseURL` / `models`） |
+| `commandcode` | 没有可用的聊天接口：只做额度，卡片上标「仅额度」 |
+
+写失败时额度行不会落盘 —— 不会出现「卡片有、模型里没有」的半截状态。与凭据有关的规则
+没变：**`apiKeyEnv` 填的是名字，不是 key**（填成 key 会被 400 拒掉；配置里已经是 key 形状
+的，读的时候会被丢掉、退回预设的引用）。移除时：插件自己写的路由会一起删，pi-ai 目录里
+本来就有的路由保留 —— 那可能早就在给模型用了。
+
+卡片头会写明 `已接入模型` / `未接入模型` / `仅额度`；写着「未接入模型」的那张卡旁边有
+「接入模型」，点一下只补模型路由，不会把卡片加成第二张 —— 老配置（比如百炼那条路由还叫
+`ali`）也能接上：插件按 `baseURL` 认得出同一个网关。
+
+### 卡片里的模型清单
+
+每张已接入模型的卡里有一条可展开的「▸ 模型」：
+
+| 动作 | 做什么 |
+|---|---|
+| 展开 | 列出这条路由当前提供的模型（`llm.listModels(provider)`） |
+| **获取模型** | 调 `llm.discoverModels('llm-pi-ai', { provider, baseURL?, api? })`：pi-ai 目录认识的按目录回答（不发请求）；百炼这种手工路由才拿存着的 key 去问 `GET {baseURL}/models`。结果以候选行出现，点「加入」才写进去 |
+| **添加模型** | 手填 `id` + 可选显示名，追加到 `llm-pi-ai.providers[provider].models` |
+| **删除** | 从同一份 `models` 里去掉；最后一条不让删（pi-ai 会拒绝解析不出模型的路由） |
+
+写的是模型路由自己的 `models` 列表，所以**模型选择器下一次请求就能看到**。代价要记住：
+目录路由一旦被写上了 `models`，就**固定成这份清单**、不再跟随 pi-ai 目录（页面上有一行小字
+写着）；删掉的模型可以再加回来。
 
 ## 五、输入预测（输入框里的灰字）
 
@@ -174,7 +206,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 ```
 
 生效规则：**客户端 JS 每次页面加载都重新读盘**，改 `build/client.js` 后刷新页面即可；
-**Host 侧（`index.js` / `providers.js` / `usage.js` / `xai-oauth.js`）换了代码要重启 DSH**。
+**Host 侧（`index.js` / `providers.js` / `usage.js` / `xai-oauth.js` / `workspace.js`）换了代码要重启 DSH**。
 
 ## 七、配置（都是可选的）
 
@@ -185,7 +217,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
     enabled: true          # false = 整页停用（chip 也消失）
     refreshMs: 60000       # 额度快照缓存与自动刷新间隔（10s–1h）
     timeoutMs: 8000        # 单个厂商接口超时
-    providers:             # 写了就是整份替换；页面上的「添加」也是写到这儿
+    providers:             # 不写就是空页；写了就是整份替换，页面上的「添加」也是写到这儿
       - id: opencode-go
         preset: opencode-go
         apiKeyEnv: OPENCODE_GO_API_KEY
@@ -198,10 +230,10 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       - id: deepseek
         preset: deepseek-api
         apiKeyEnv: DEEPSEEK_API_KEY
-      - id: bailian
+      - id: bailian               # 目录里没有 → 需要 llm-pi-ai.providers 里那条路由
         preset: bailian
         apiKeyEnv: DASHSCOPE_API_KEY
-      - id: my-oc                  # 换网关：baseURL 替换预设的默认根路径
+      - id: my-oc                # 换网关：baseURL 替换预设的默认根路径
         preset: opencode-go
         baseURL: https://opencode.ai/inference/go
     predict:               # 输入预测（默认关）
@@ -227,6 +259,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 | 方法 | 路径 | 作用 |
 |---|---|---|
 | GET | `/quota/state` | 快照：卡片 + 用量 + 预设清单（额度缓存 `refreshMs`） |
+| GET | `/quota/workspace?sessionId=` | composer 左侧那两格：`{root, name, branch, gitRoot, detached}`；`branch: null` = 不是仓库 |
 | POST | `/quota/refresh` | 强制重读额度 |
 | POST | `/quota/key` | `{id, key}` → 写凭据库 |
 | POST | `/quota/clear` | `{id}` → key 就 unset，oauth 就删记录 |
@@ -234,8 +267,13 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 | POST | `/quota/suggest` | `{sessionId}` → `{suggestion, reason}`；关掉时 `reason: disabled`，不碰模型 |
 | GET | `/quota/models` | 预测的模型下拉：`{groups: [{provider, name, models}]}` |
 | POST | `/quota/predict` | `{enabled?, provider?, model?, systemPrompt?, maxTokens?, debounceMs?}` → 写进 patch |
-| POST | `/quota/providers` | `{preset, id, label?, baseURL?, apiKeyEnv?}` → 追加到 patch |
-| POST | `/quota/providers/remove` | `{id}` → 从 patch 移除（至少留一个）；带 `route` 的预设顺带删掉 `llm-pi-ai` 里那条模型路由 |
+| POST | `/quota/providers` | `{preset, label?, key?, baseURL?, apiKeyEnv?, id?}` → 写额度行 + 接模型路由 + 存 key |
+| POST | `/quota/providers/attach` | `{id}` → 只补这家缺的模型路由（卡片上的「接入模型」） |
+| GET | `/quota/provider/models?id=` | 这家的模型清单：`{provider, models: [{id, name, contextWindow?, maxTokens?}]}` |
+| POST | `/quota/provider/models/discover` | `{id}` → 问厂商要模型（catalog 直接答）：`{ok, models}` |
+| POST | `/quota/provider/models/add` | `{id, model: {id, name?}}` → 追加到 `llm-pi-ai.providers[].models` |
+| POST | `/quota/provider/models/remove` | `{id, modelId}` → 从那份 `models` 里去掉（至少留一条） |
+| POST | `/quota/providers/remove` | `{id}` → 从 patch 移除；插件自己写的模型路由顺带删掉，pi-ai 目录里的路由保留 |
 | POST | `/quota/login/start` | 领设备码，返回 `userCode` / 授权链接 |
 | GET | `/quota/login/status?id=` | `pending` / `success` / `failed` / `cancelled` |
 | POST | `/quota/login/cancel` | 取消一次登录 |
@@ -259,9 +297,10 @@ cd plugins\dsh-quota
 
 node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 项）
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
-node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、用量、同源（78 项）
-node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、预测灰字、存 key、登录、加供应商（66 项）
-node test\prediction.test.mjs                 # 预测：摘录、清洗、空闲判断、模型选择（20 项）
+node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、模型清单、工作区、用量、同源（104 项）
+node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、工作区、模型清单、预测灰字、存 key、登录、加供应商（97 项）
+node test\prediction.test.mjs                 # 预测：摘录、清洗、空闲判断、模型选择（21 项）
+node test\workspace.test.mjs                  # 工作区：文件夹名、分支、游离 HEAD、探针缓存（10 项）
 
 node tools\grok-login.test.mjs                # grok-login 的 YAML 写入回归（读本机凭据文件）
 ```
@@ -302,9 +341,10 @@ build/providers.js    四个 reader + fetch（纯函数）
 build/usage.js        用量折叠 / 汇总 / 花费折算 / 落盘（纯函数 + 一个小 store）
 build/prices.js       目录价表（由 tools/gen-prices.mjs 生成，USD / 百万 token）
 build/prediction.js   输入预测：读会话、问模型、洗答案（纯函数 + 一个小服务）
+build/workspace.js    工作区：文件夹名 / git 分支 / 探针缓存（exec 注入，可离线测）
 build/xai-oauth.js    设备码 / 续期 / grant 形状（fetch 注入）
-build/index.js        Host：配置、快照、路由、登录、供应商、用量接线
-build/client.js       Client：chip + 设置页（纯 JS，无构建步骤）
+build/index.js        Host：配置、快照、路由、登录、供应商、工作区、用量接线
+build/client.js       Client：chip + 工作区两格 + 设置页（纯 JS，无构建步骤）
 test/*.mjs            上面那三组测试 + live-probe
 tools/*.mjs           与本机凭据打交道的命令行工具（不进 npm 包，见 package.json 的 files）
   grok-login.mjs        走设备码登录并把 grant 写进 ~/.dsh/.credentials.yaml
