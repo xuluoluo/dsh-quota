@@ -301,7 +301,7 @@ node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
 node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、模型清单、工作区、用量、同源（108 项）
 node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、工作区、模型清单、预测灰字、存 key、登录、加供应商（98 项）
-node test\prediction.test.mjs                 # 预测：摘录、清洗、空闲判断、模型选择（21 项）
+node test\prediction.test.mjs                 # 预测：摘录、清洗、空闲判断、模型选择（22 项）
 node test\workspace.test.mjs                  # 工作区：文件夹名、分支、游离 HEAD、探针缓存（10 项）
 
 node tools\grok-login.test.mjs                # grok-login 的 YAML 写入回归（读本机凭据文件）

@@ -77,6 +77,12 @@ runningEvents.messages = messages
 const running = createPredictor(ctxWith({ session: fakeSession({ events: runningEvents }), llm: recordingLlm() }), () => settingsFor())
 check('正在跑的时候不问', (await running.suggest('s1')).reason === 'not-idle')
 
+// 一轮结束后还会跟一串 title / workspace / job 事件：窗口太窄会把「空闲」误判成「在跑」。
+const noisyEvents = [...idleEvents, ...Array.from({ length: 60 }, () => ({ type: 'job/settled', data: {} }))]
+noisyEvents.messages = messages
+const noisy = createPredictor(ctxWith({ session: fakeSession({ events: noisyEvents }), llm: recordingLlm() }), () => settingsFor())
+check('结束后跟了很多杂事件也还算空闲', (await noisy.suggest('s1')).suggestion === '继续')
+
 const emptySession = fakeSession({ events: [{ type: 'turn/start' }, { type: 'turn/end', data: { reason: { kind: 'completed' } } }] })
 const empty = createPredictor(ctxWith({ session: emptySession, llm: recordingLlm() }), () => settingsFor())
 check('没有用户消息时不问', (await empty.suggest('s1')).reason === 'empty-conversation')

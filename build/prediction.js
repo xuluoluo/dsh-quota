@@ -26,7 +26,9 @@ const MAX_SUGGESTION_CHARS = 200
 /** The last completed turn, or null — a prediction only makes sense at rest. */
 function completedTurnSeq(session) {
   const end = typeof session.seq === 'number' ? session.seq : 0
-  const floor = Math.max(0, end - 24)
+  // 一轮结束后还会跟几条 title / workspace / job 事件；窗口留宽一点，
+  // 免得「明明空闲却判断成在跑」。碰到本轮 turn/start 就停。
+  const floor = Math.max(0, end - 200)
   for (let seq = end - 1; seq >= floor; seq -= 1) {
     const event = session.eventAt?.(seq)
     if (!event) break
