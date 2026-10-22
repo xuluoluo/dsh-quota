@@ -929,7 +929,9 @@ function registerRoutes(ctx, service, settings, signIn) {
         await credentials.set(row.apiKeyEnv ?? preset.apiKeyEnv, key)
         stored = true
       }
-      const providers = await editProviders(ctx, (rows) => [...rows, row])
+      // Idempotent: a double click may reach this line twice; the second one
+      // finds the row already there instead of appending a duplicate.
+      const providers = await editProviders(ctx, (rows) => (rows.some((entry) => entry.id === row.id) ? rows : [...rows, row]))
       sendJson(res, 200, { ok: true, id, providers, stored, model })
     } catch (error) {
       jsonError(res, 500, String(error?.message ?? error))
@@ -1020,12 +1022,25 @@ function registerRoutes(ctx, service, settings, signIn) {
     const modelId = typeof model.id === 'string' ? model.id.trim() : ''
     if (!MODEL_ID_PATTERN.test(modelId)) return jsonError(res, 400, 'a model id is required')
     const name = typeof model.name === 'string' && model.name.trim() !== '' ? model.name.trim() : undefined
+    const entry = { id: modelId }
+    if (name) entry.name = name
+    // Discovery answers with contextWindow / maxTokens / inputModalities; carry
+    // the parts the route config spells, so adopting a candidate does not lose
+    // the sizes the vendor just told us.
+    if (Number.isInteger(model.contextWindow) && model.contextWindow > 0) entry.contextWindow = model.contextWindow
+    if (Number.isInteger(model.maxTokens) && model.maxTokens > 0) entry.maxTokens = model.maxTokens
+    const input = Array.isArray(model.input)
+      ? [...new Set(model.input.filter((value) => typeof value === 'string' && value !== ''))]
+      : Array.isArray(model.inputModalities)
+        ? [...new Set(model.inputModalities.filter((value) => typeof value === 'string' && value !== ''))]
+        : []
+    if (input.length > 0) entry.input = input
     const llm = ctx.get('llm')
     const provider = await resolvedProvider(ctx, target, llm)
     try {
       const rows = await effectiveModelRows(ctx, llm, provider)
       if (rows.some((row) => row.id === modelId)) return jsonError(res, 409, `"${modelId}" is already a model here`)
-      const next = [...rows, { id: modelId, ...(name ? { name } : {}) }]
+      const next = [...rows, entry]
       await writeRouteModels(ctx, provider, next)
       sendJson(res, 200, { ok: true, models: next })
     } catch (error) {
@@ -1126,6 +1141,40 @@ function configRow(ctx) {
   return entry ? { editor, entry } : undefined
 }
 
+/**
+ * One config write, serialized with this plugin's other writes.
+ *
+ * The editor derives the next document from the config it read when the entry
+ * was handed in, so two writes that overlap can make the second one compare a
+ * stale `next` against the document the first one just wrote — which the editor
+ * reports as "overridden by a home patch" even though nothing overrides it.
+ * A queue (plus an idempotent mutation) is what keeps a double click or a slow
+ * reload from turning into that error.
+ */
+let configWriteChain = Promise.resolve()
+
+async function editEntry(found, change) {
+  const attempt = (entry) => found.editor.edit(entry, change)
+  const run = async () => {
+    try {
+      return await attempt(found.entry)
+    } catch (error) {
+      const said = String(error?.message ?? error)
+      if (!/no longer available|changed during reload|overridden by a home patch/.test(said)) throw error
+      const fresh = found.editor.entries().find((entry) => entry?.options?.id === found.entry?.options?.id
+        || entry?.options?.name === found.entry?.options?.name)
+      if (fresh && fresh !== found.entry) return attempt(fresh)
+      if (/overridden by a home patch/.test(said)) {
+        throw new Error(`配置被更高优先级的层覆盖，页面改不了：检查 ~/.dsh/cordis.patch.yml（home patch）或 DSH 的 --patch 启动参数。原始信息：${said}`)
+      }
+      throw error
+    }
+  }
+  const next = configWriteChain.then(run, run)
+  configWriteChain = next.then(() => undefined, () => undefined)
+  return next
+}
+
 /** The rows a config starts from: none. A provider exists once it is added. */
 function defaultProviderRows() {
   return []
@@ -1145,7 +1194,7 @@ async function editProviders(ctx, mutate) {
     throw new Error('this profile does not keep the dsh-quota row in its own patch layer, so the page cannot rewrite the provider list')
   }
   let next
-  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+  await editEntry(found, (current = {}, inherited = {}) => {
     const base = { ...inherited, ...current }
     const rows = Array.isArray(base.providers) && base.providers.length > 0
       ? base.providers.map((row) => ({ ...row }))
@@ -1167,7 +1216,7 @@ async function editConfig(ctx, mutate) {
     throw new Error('this profile does not keep the dsh-quota row in its own patch layer, so the page cannot rewrite these settings')
   }
   let next
-  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+  await editEntry(found, (current = {}, inherited = {}) => {
     next = mutate({ ...inherited, ...current })
     return next
   })
@@ -1197,7 +1246,7 @@ async function upsertModelRoute(ctx, { id, label, reference, route }) {
   const found = modelRouteRow(ctx)
   if (!found) return null
   let written
-  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+  await editEntry(found, (current = {}, inherited = {}) => {
     const base = { ...inherited, ...current }
     const providers = { ...(base.providers ?? {}) }
     written = {
@@ -1224,7 +1273,7 @@ async function ensureCatalogRoute(ctx, { provider, reference }) {
   if (!found) return { provider, wired: false, reason: 'this profile keeps no llm-pi-ai row' }
   let entry
   let wired = false
-  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+  await editEntry(found, (current = {}, inherited = {}) => {
     const base = { ...inherited, ...current }
     const providers = { ...(base.providers ?? {}) }
     const existing = providers[provider]
@@ -1318,14 +1367,19 @@ async function effectiveModelRows(ctx, llm, provider) {
   const { route } = routeConfigOf(ctx, provider)
   if (Array.isArray(route?.models) && route.models.length > 0) return route.models.map((model) => ({ ...model }))
   const models = await listModels(llm, provider).catch(() => [])
-  return models.map((model) => ({ id: model.id, ...(model.name && model.name !== model.id ? { name: model.name } : {}) }))
+  return models.map((model) => ({
+    id: model.id,
+    ...(model.name && model.name !== model.id ? { name: model.name } : {}),
+    ...(Number.isInteger(model.contextWindow) && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
+    ...(Number.isInteger(model.maxTokens) && model.maxTokens > 0 ? { maxTokens: model.maxTokens } : {}),
+  }))
 }
 
 /** Replace one route's model list in the profile patch. */
 async function writeRouteModels(ctx, provider, models) {
   const found = modelRouteRow(ctx)
   if (!found) throw new Error('this profile keeps no llm-pi-ai row, so models cannot be edited here')
-  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+  await editEntry(found, (current = {}, inherited = {}) => {
     const base = { ...inherited, ...current }
     const providers = { ...(base.providers ?? {}) }
     const route = { ...(providers[provider] ?? {}) }
@@ -1343,7 +1397,7 @@ async function removeModelRoute(ctx, { id, route }) {
   const found = modelRouteRow(ctx)
   if (!found) return false
   let removed = false
-  await found.editor.edit(found.entry, (current = {}, inherited = {}) => {
+  await editEntry(found, (current = {}, inherited = {}) => {
     const base = { ...inherited, ...current }
     const providers = { ...(base.providers ?? {}) }
     const existing = providers[id]

@@ -976,7 +976,14 @@ window.__ModuleLoader__.load({
         if (id === '') return
         busyPair[1]('add:' + id)
         setError('')
-        postJson(ROUTES.providerModelsAdd, { id: card.id, model: { id: id, name: model.name } })
+        // 厂商返回的候选还带着上下文窗口与模态：一起交给 Host，采纳时别丢掉。
+        var entry = { id: id }
+        if (typeof model.name === 'string' && model.name.trim() !== '') entry.name = model.name.trim()
+        if (Number.isInteger(model.contextWindow)) entry.contextWindow = model.contextWindow
+        if (Number.isInteger(model.maxTokens)) entry.maxTokens = model.maxTokens
+        var input = Array.isArray(model.input) ? model.input : (Array.isArray(model.inputModalities) ? model.inputModalities : [])
+        if (input.length > 0) entry.input = input
+        postJson(ROUTES.providerModelsAdd, { id: card.id, model: entry })
           .then(function (body) {
             if (Array.isArray(body && body.models)) modelsPair[1](body.models)
             if (candidates) {

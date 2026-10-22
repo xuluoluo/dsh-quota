@@ -489,11 +489,17 @@ check('获取模型走 llm.discoverModels',
   discovery.status === 200 && discovery.json.models.length === 2 && discoverCall?.settingsNs === 'llm-pi-ai' && discoverCall.request.provider === 'opencode-go',
   JSON.stringify({ discovery: discovery.json, discoverCall }))
 
-const addedModel = await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { id: 'new-model', name: 'New Model' } } })
+const addedModel = await modelCall(ROUTES.providerModelsAdd, {
+  method: 'POST',
+  body: { id: 'opencode-go', model: { id: 'new-model', name: 'New Model', contextWindow: 123456, maxTokens: 4096, input: ['text', 'image'] } },
+})
 let modelConfig = modelRows[0].options.config.providers['opencode-go'].models
 check('添加模型写进 llm-pi-ai.providers[].models',
   addedModel.status === 200 && modelConfig.length === 2 && modelConfig[1].id === 'new-model',
   JSON.stringify({ added: addedModel.json, modelConfig }))
+check('添加模型保留上下文窗口 / 输出上限 / 模态',
+  modelConfig[1].contextWindow === 123456 && modelConfig[1].maxTokens === 4096 && modelConfig[1].input.join() === 'text,image',
+  JSON.stringify(modelConfig[1]))
 check('重复模型回 409', (await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { id: 'new-model' } } })).status === 409)
 check('没给 id 回 400', (await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { name: 'x' } } })).status === 400)
 
@@ -639,6 +645,46 @@ check('移除插件写过的路由也会带走它',
   JSON.stringify(editRows[1].options.config.providers))
 check('剩最后一家也能移除',
   (await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'opencode-go' } })).status === 200)
+
+// —— 连点两下「添加」：配置写入要串行，且只落一行 ——
+// configEditor 用「写入前读到的 config」推导 next，两个写入重叠时第二个会拿旧
+// next 去比对刚写完的文档，于是报 “overridden by a home patch”（其实没有覆盖）。
+const raceRows = [
+  { options: { id: 'dsh-quota', name: '@local/dsh-quota', config: { providers: [] } } },
+  { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: {} } } },
+]
+const raceRoutes = new Map()
+let activeWrites = 0
+let peakWrites = 0
+const raceEditor = {
+  entries: () => raceRows,
+  async edit(entry, change) {
+    activeWrites += 1
+    peakWrites = Math.max(peakWrites, activeWrites)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    const next = change(structuredClone(entry.options.config ?? {}), {})
+    entry.options.config = next
+    activeWrites -= 1
+    return next
+  },
+}
+apply({
+  logger: ctx.logger,
+  get: (name) => (name === 'configEditor' ? raceEditor : name === 'credentials' ? credentials : undefined),
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { raceRoutes.set(route.path, route.handler); return () => {} } },
+}, raceRows[0].options.config)
+const raceCall = (route, options) => callOn(raceRoutes, route, options)
+const [firstAdd, secondAdd] = await Promise.all([
+  raceCall(ROUTES.providers, { method: 'POST', body: { preset: 'opencode-go' } }),
+  raceCall(ROUTES.providers, { method: 'POST', body: { preset: 'opencode-go' } }),
+])
+check('并发添加都回 200', firstAdd.status === 200 && secondAdd.status === 200,
+  JSON.stringify([firstAdd.status, secondAdd.status]))
+check('并发添加只落一行', raceRows[0].options.config.providers.filter((row) => row.preset === 'opencode-go').length === 1,
+  JSON.stringify(raceRows[0].options.config.providers))
+check('配置写入是串行的', peakWrites === 1, `peak=${peakWrites}`)
 
 // 配置里本来就把 key 填进 apiKeyEnv：读的时候要丢掉，不能把它当引用泄露出去
 const leakRoutes = new Map()
