@@ -188,6 +188,8 @@ ali:
 1. 一轮回答**结束**（最后一条事件是 `turn/end` 且 `reason.kind = completed`）、输入框**空着**、
    会话**没在跑** → 隔 `debounceMs`（默认 700ms）去问一次模型；
 2. 模型答案洗掉引号/列表符号、只留第一行，作为灰字贴在**光标后面**（`conversation.input.overlay`）；
+   输入框空着时它会**顶掉 placeholder**（两者都在左上角），光标量不出矩形（空段落常见）就退回
+   编辑区文字起点；
 3. **Tab 或 → 填入**（`inputActions.captureInsertion()` + `insertText`），Esc 忽略，**永不自动发送**；
    一旦你开始打字，灰字和那次请求一起作废（`AbortController`）；
 4. 用哪个模型：设置里指定就听指定的，否则跟随当前会话的选择，再否则用 profile 的默认模型。
@@ -298,7 +300,7 @@ cd plugins\dsh-quota
 node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 项）
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
 node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、模型清单、工作区、用量、同源（108 项）
-node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、工作区、模型清单、预测灰字、存 key、登录、加供应商（97 项）
+node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、工作区、模型清单、预测灰字、存 key、登录、加供应商（98 项）
 node test\prediction.test.mjs                 # 预测：摘录、清洗、空闲判断、模型选择（21 项）
 node test\workspace.test.mjs                  # 工作区：文件夹名、分支、游离 HEAD、探针缓存（10 项）
 

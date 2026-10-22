@@ -661,22 +661,59 @@ window.__ModuleLoader__.load({
      * 灰字贴在光标后面。位置来自选区：容器（这个 overlay 槽）通常在 composer
      * 内部，所以把光标的视口坐标减去容器的坐标就是相对位置。
      */
+    /**
+     * 编辑器与 placeholder 不在 overlay 槽的子树里：槽挂在 `.card` 下的
+     * overlayAnchor 上，输入框在旁边的兄弟节点里。所以从容器往上找几层，
+     * 第一个含 contenteditable 的祖先就是 composer 的公共容器。
+     */
+    function composerScope(container) {
+      var node = container
+      for (var depth = 0; node && depth < 4; depth += 1) {
+        if (typeof node.querySelector === 'function') {
+          var editor = node.querySelector('[contenteditable="true"]')
+          if (editor) return { scope: node, editor: editor }
+        }
+        node = node.parentElement
+      }
+      return { scope: null, editor: null }
+    }
+
     function caretBox(container, ghost) {
       if (!container || typeof window === 'undefined' || typeof window.getSelection !== 'function') return null
-      var selection = window.getSelection()
-      if (!selection || selection.rangeCount === 0) return null
-      var range = selection.getRangeAt(0)
-      var rect = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null
-      if (!rect || (rect.width === 0 && rect.height === 0)) return null
+      var found = composerScope(container)
+      var editor = found.editor
+      // 没把光标放进输入框就别飘字：那会像界面自己的残影，而不是提示。
+      if (editor && document.activeElement !== editor && !editor.contains(document.activeElement)) return null
       var base = container.getBoundingClientRect()
-      var editor = container.parentElement ? container.parentElement.querySelector('[contenteditable="true"]') : null
       var style = editor && typeof window.getComputedStyle === 'function' ? window.getComputedStyle(editor) : null
+      var font = style ? style.font : 'inherit'
+      var lineHeight = style ? style.lineHeight : '20px'
+      var color = style ? style.color : 'inherit'
+      var selection = window.getSelection()
+      var rect = selection && selection.rangeCount > 0
+        ? (typeof selection.getRangeAt(0).getBoundingClientRect === 'function' ? selection.getRangeAt(0).getBoundingClientRect() : null)
+        : null
+      // 空段落里的折叠光标经常量出 0×0（placeholder 是伪元素，不算选区）：
+      // 这时退回「编辑区文字起点」，不然灰字永远不出现。
+      if (!rect || (rect.width === 0 && rect.height === 0)) {
+        if (!editor) return null
+        var box = editor.getBoundingClientRect()
+        var padLeft = style ? parseFloat(style.paddingLeft || '0') : 0
+        var padTop = style ? parseFloat(style.paddingTop || '0') : 0
+        return {
+          left: box.left - base.left + padLeft + 2,
+          top: box.top - base.top + padTop,
+          font: font,
+          lineHeight: lineHeight,
+          color: color,
+        }
+      }
       return {
         left: rect.right - base.left,
         top: rect.top - base.top,
-        font: style ? style.font : 'inherit',
-        lineHeight: style ? style.lineHeight : '20px',
-        color: style ? style.color : 'inherit',
+        font: font,
+        lineHeight: lineHeight,
+        color: color,
       }
     }
 
@@ -774,10 +811,26 @@ window.__ModuleLoader__.load({
         return function () { window.removeEventListener('keydown', onKeyDown, true) }
       }, [enabled])
 
+      // 灰字和 placeholder 都从输入框左上角开始：有预测时先把 placeholder 藏起来，
+      // 不然两行字会叠在一起。
+      React.useEffect(function () {
+        if (!ghost || !box) return undefined
+        var found = composerScope(root.current)
+        var placeholder = found.scope ? found.scope.querySelector('[data-composer-placeholder]') : null
+        if (!placeholder || !placeholder.style) return undefined
+        var previous = placeholder.style.visibility
+        placeholder.style.visibility = 'hidden'
+        return function () {
+          placeholder.style.visibility = previous
+        }
+      }, [ghost, box])
+
       if (!ghost) return null
       return h('div', {
         'data-dsh-quota': 'ghost',
-        style: { position: 'absolute', inset: '0', pointerEvents: 'none', overflow: 'hidden' },
+        // overlayAnchor 本身是 height:0 —— 这里绝不能 overflow:hidden，
+        // 否则灰字会被裁在这条零高的缝里（这就是它一直不出现的原因）。
+        style: { position: 'absolute', left: '0', top: '0', right: '0', height: '0', overflow: 'visible', pointerEvents: 'none' },
       },
       box
         ? h('span', {

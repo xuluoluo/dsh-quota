@@ -618,6 +618,10 @@ check('空输入框 + 空闲 → 请求一次预测', Boolean(predictCall) && JS
   JSON.stringify(calls.map((call) => call.url)))
 check('预测结果不自动填入', inserted.length === 0)
 check('预测的灰字挂在 composer 的 overlay 槽里', Boolean(byAttr(mini.tree, 'data-dsh-quota', 'ghost')))
+const ghostRoot = byAttr(mini.tree, 'data-dsh-quota', 'ghost')
+check('灰字容器不裁剪（overlayAnchor 本身高 0）',
+  Boolean(ghostRoot) && ghostRoot.props.style.overflow === 'visible' && ghostRoot.props.style.height === '0',
+  JSON.stringify(ghostRoot && ghostRoot.props.style))
 
 const tab = keyHandlers[keyHandlers.length - 1]
 tab({ key: 'Tab', shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}, stopPropagation() {} })
