@@ -1,5 +1,5 @@
 /**
- * `@local/dsh-quota` — the remaining allowance of the providers DSH talks to,
+ * `dsh-allowance` — the remaining allowance of the providers DSH talks to,
  * on screen, with the two ways a credential gets there: an API key stored
  * through this page, and Grok's own sign-in.
  *
@@ -1137,7 +1137,7 @@ function configRow(ctx) {
   } catch {
     return undefined
   }
-  const entry = entries.find((candidate) => candidate?.options?.id === CONFIG_ID || candidate?.options?.name === '@local/dsh-quota')
+  const entry = entries.find((candidate) => candidate?.options?.id === CONFIG_ID || candidate?.options?.name === 'dsh-allowance')
   return entry ? { editor, entry } : undefined
 }
 

@@ -279,7 +279,7 @@ globalThis.fetch = async (url, init) => {
 
 // —— 加载 bundle ——
 await import(pathToFileURL(path.join(here, '..', 'build', 'client.js')).href)
-check('bundle 通过 __ModuleLoader__ 注册', definition?.id === '@local/dsh-quota')
+check('bundle 通过 __ModuleLoader__ 注册', definition?.id === 'dsh-allowance')
 
 const mod = definition.factory((name) => {
   if (name === 'react') return mini.React

@@ -201,7 +201,13 @@ Host 侧只有 `build/prediction.js` 一个文件：`suggest(sessionId)` 读 `ct
 事件流与 `deriveMessages()`，调 `ctx.llm.stream(...)` 收 `text-delta`。
 ## 六、安装
 
-已经在 `desktop` profile 里装好了（`@local/dsh-quota`）。重装/更新：
+从 GitHub 安装：
+
+```
+dsh plugin --profile desktop add github:xuluoluo/dsh-quota
+```
+
+本地目录重装/更新：
 
 ```
 plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-workspace\plugins\dsh-quota
@@ -214,7 +220,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 
 ```yaml
 - id: dsh-quota
-  name: '@local/dsh-quota'
+  name: 'dsh-allowance'
   config:
     enabled: true          # false = 整页停用（chip 也消失）
     refreshMs: 60000       # 额度快照缓存与自动刷新间隔（10s–1h）
@@ -328,7 +334,7 @@ commandcode  5h 0%  weekly 12%  当月 $69.93 / $70.00  plan=GOAT  10-22 到期�
 
 ## 十、回滚
 
-- `plugin_manager remove_bundle  target = @local/dsh-quota`，或删掉 profile patch 里那一行；
+- `plugin_manager remove_bundle  target = dsh-allowance`，或删掉 profile patch 里那一行；
 - Grok 登录写的是 `llm-pi-ai/xai`，删掉它等于退出登录，不影响其它记录；
 - `~/.dsh/.quota-usage.json` 可以随便删，删掉只是用量清零。
 

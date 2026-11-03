@@ -1,10 +1,10 @@
-// The browser half of @local/dsh-quota. Plain JavaScript on purpose: the Host
+// The browser half of dsh-allowance. Plain JavaScript on purpose: the Host
 // serves this file as-is, so there is no build step between this text and the
 // page. It draws two things — a compact allowance chip beside the composer's
 // model selector, and the Quota page in Settings, where a provider's key can
 // be stored and Grok's sign-in can be approved.
 window.__ModuleLoader__.load({
-  id: '@local/dsh-quota',
+  id: 'dsh-allowance',
   factory(require) {
     var module = { exports: {} }
     var React = require('react')

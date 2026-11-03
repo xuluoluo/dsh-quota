@@ -1,8 +1,12 @@
 {
-  "name": "@local/dsh-quota",
+  "name": "dsh-allowance",
   "version": "1.5.0",
-  "private": true,
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xuluoluo/dsh-quota.git"
+  },
   "description": "Shows the remaining allowance of OpenCode Go, Grok and Command Code in DSH, adds model providers with their key, counts token usage and cost, warns at thresholds, predicts the next message as ghost text, reads the DeepSeek API balance, stores their API keys, runs Grok's sign-in, and shows the working folder plus git branch beside the composer.",
   "exports": {
     ".": "./build/index.js",

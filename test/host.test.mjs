@@ -111,7 +111,7 @@ const routes = new Map()
 const listeners = new Map()
 // The profile's own patch layer, as the config editor sees it.
 const configRows = [
-  { options: { id: 'dsh-quota', name: '@local/dsh-quota', config: {} } },
+  { options: { id: 'dsh-quota', name: 'dsh-allowance', config: {} } },
   { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' } } } } },
 ]
 const configEditor = {
@@ -379,7 +379,7 @@ const mountRows = [
   {
     options: {
       id: 'dsh-quota',
-      name: '@local/dsh-quota',
+      name: 'dsh-allowance',
       config: { providers: [{ id: 'bailian', preset: 'bailian', apiKeyEnv: 'DASHSCOPE_API_KEY' }] },
     },
   },
@@ -402,7 +402,7 @@ check('预设名字变了也认得同一个网关（ali 就是百炼）',
   mountedState.json.providers[0].inModels === true && mountedState.json.providers[0].modelProvider === 'ali',
   JSON.stringify(mountedState.json.providers[0]))
 
-const orphanRows = [{ options: { id: 'dsh-quota', name: '@local/dsh-quota', config: { providers: [{ id: 'bailian', preset: 'bailian' }] } } }]
+const orphanRows = [{ options: { id: 'dsh-quota', name: 'dsh-allowance', config: { providers: [{ id: 'bailian', preset: 'bailian' }] } } }]
 const orphanRoutes = new Map()
 apply({
   logger: ctx.logger,
@@ -437,7 +437,7 @@ const modelRows = [
   {
     options: {
       id: 'dsh-quota',
-      name: '@local/dsh-quota',
+      name: 'dsh-allowance',
       config: { providers: [{ id: 'opencode-go', preset: 'opencode-go' }] },
     },
   },
@@ -557,7 +557,7 @@ const editRows = [
   {
     options: {
       id: 'dsh-quota',
-      name: '@local/dsh-quota',
+      name: 'dsh-allowance',
       config: { providers: [{ id: 'opencode-go', preset: 'opencode-go', apiKeyEnv: 'OPENCODE_GO_API_KEY' }] },
     },
   },
@@ -650,7 +650,7 @@ check('剩最后一家也能移除',
 // configEditor 用「写入前读到的 config」推导 next，两个写入重叠时第二个会拿旧
 // next 去比对刚写完的文档，于是报 “overridden by a home patch”（其实没有覆盖）。
 const raceRows = [
-  { options: { id: 'dsh-quota', name: '@local/dsh-quota', config: { providers: [] } } },
+  { options: { id: 'dsh-quota', name: 'dsh-allowance', config: { providers: [] } } },
   { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: {} } } },
 ]
 const raceRoutes = new Map()
