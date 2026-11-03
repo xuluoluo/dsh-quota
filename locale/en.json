@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Quota",
-    "description": "Shows the remaining allowance of OpenCode Go, Grok and Command Code, adds providers and stores their API keys, runs Grok's sign-in, and shows the working folder plus git branch beside the composer."
+    "description": "Shows the remaining allowance of OpenCode Go, Grok, Command Code, ChatGPT and Claude. ChatGPT and Claude are read from the subscription login of the local CLI. Adds providers, stores API keys, runs Grok's sign-in, and shows the working folder plus git branch beside the composer."
   }
 }

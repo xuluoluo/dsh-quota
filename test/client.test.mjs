@@ -192,6 +192,8 @@ const payload = {
     { id: 'deepseek-api', label: 'DeepSeek API', auth: 'key', addsModels: true, modelProvider: 'deepseek' },
     { id: 'bailian', label: 'Alibaba Bailian', auth: 'key', addsModels: true, modelProvider: 'bailian' },
     { id: 'test-vendor', label: 'Test Vendor', auth: 'key', addsModels: true, modelProvider: 'test-vendor' },
+    { id: 'chatgpt', label: 'ChatGPT', auth: 'cli', addsModels: false, modelProvider: null, cliFile: '.codex/auth.json' },
+    { id: 'claude', label: 'Claude', auth: 'cli', addsModels: false, modelProvider: null, cliFile: '.claude/.credentials.json' },
   ],
   providers: [
     cardBase,
@@ -231,6 +233,29 @@ const payload = {
       keysUrl: 'https://bailian.console.aliyun.com/',
       quota: false, windows: [], worst: null,
       credential: { auth: 'key', configured: true, source: 'file', hint: 'DASHSCOPE_API_KEY', writable: true },
+    },
+    {
+      id: 'chatgpt', label: 'ChatGPT', preset: 'chatgpt', auth: 'cli',
+      modelProvider: null, inModels: false, modelReason: 'quota-only',
+      plan: 'Plus',
+      windows: [
+        { key: 'weekly', used: 20, resetsAt: '2026-11-09T00:00:00.000Z' },
+        { key: 'five-hour', used: 0, resetsAt: '2026-11-03T12:00:00.000Z' },
+      ],
+      worst: { key: 'weekly', used: 20 },
+      credential: { auth: 'cli', configured: true, source: 'cli', account: 'person@example.com', hint: '.codex/auth.json', writable: false },
+    },
+    {
+      id: 'claude', label: 'Claude', preset: 'claude', auth: 'cli',
+      modelProvider: null, inModels: false, modelReason: 'quota-only',
+      plan: 'Pro',
+      note: 'of the week: Claude Code 100%',
+      windows: [
+        { key: 'five-hour', used: 21, resetsAt: '2026-11-03T11:19:59.000Z' },
+        { key: 'weekly', used: 17, resetsAt: '2026-11-09T18:59:59.000Z' },
+      ],
+      worst: { key: 'five-hour', used: 21 },
+      credential: { auth: 'cli', configured: true, source: 'cli', hint: '.claude/.credentials.json', writable: false },
     },
   ],
 }
@@ -330,8 +355,8 @@ check('首帧（还没取到数）不渲染', mini.mount(chipSlot.component) ===
 await tick()
 check('取数打了 /quota/state', calls.some((call) => call.url.endsWith('/quota/state')), JSON.stringify(calls))
 let chipTexts = textsOf(mini.tree)
-check('chip 渲染出五个 provider',
-  chipTexts.includes('OpenCode Go') && chipTexts.includes('Grok') && chipTexts.includes('Command Code') && chipTexts.includes('DeepSeek API') && chipTexts.includes('Alibaba Bailian'),
+check('chip 渲染出各个 provider',
+  ['OpenCode Go', 'Grok', 'Command Code', 'DeepSeek API', 'Alibaba Bailian', 'ChatGPT', 'Claude'].every((name) => chipTexts.includes(name)),
   JSON.stringify(chipTexts))
 check('chip 显示最坏窗口的百分比', chipTexts.includes('33%') && chipTexts.includes('100%') && chipTexts.includes('93%'),
   JSON.stringify(chipTexts))
@@ -396,11 +421,14 @@ check('预测开关是勾上的', Boolean(predictToggle) && predictToggle.props.
 
 pageTexts = await openTab('额度')
 check('每个 provider 都有移除按钮',
-  elements(mini.tree).filter((node) => node.type === 'button' && textsOf(node).join('') === '移除').length === 5)
+  elements(mini.tree).filter((node) => node.type === 'button' && textsOf(node).join('') === '移除').length === 7)
 
 // —— 设置页：凭据状态与动作 ——
 check('已存储的 key 说了来源', pageTexts.join('').includes('已存入 DSH 凭据库'))
 check('CLI 登录说了账号', pageTexts.join('').includes('使用 Command Code CLI 的登录') && pageTexts.join('').includes('xuluoluo'))
+check('ChatGPT 订阅画出套餐和登录来源', pageTexts.join('').includes('套餐 · Plus') && pageTexts.join('').includes('使用 Codex 的 ChatGPT 登录'))
+check('Claude 订阅画出套餐、本机登录和本周构成', pageTexts.join('').includes('套餐 · Pro') && pageTexts.join('').includes('使用 Claude Code 的登录') && pageTexts.join('').includes('of the week: Claude Code 100%'))
+check('订阅卡的凭据区叫本机登录', pageTexts.includes('本机登录'))
 check('未登录的 Grok 显示登录按钮', Boolean(findByText(mini.tree, '登录 Grok')))
 check('凭据引用名可见', pageTexts.includes('OPENCODE_GO_API_KEY'))
 

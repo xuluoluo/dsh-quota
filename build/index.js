@@ -15,7 +15,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PRICES } from './prices.js'
 import { DEFAULT_PROMPT, createPredictor } from './prediction.js'
-import { PRESETS, probeTarget, readQuota, worstOf } from './providers.js'
+import { PRESETS, probeTarget, readClaudeAuth, readCodexAuth, readQuota, worstOf } from './providers.js'
 import { createUsageStore, usageFile } from './usage.js'
 import { createWorkspaceProbe } from './workspace.js'
 import { XAI_OAUTH, accountOf, pollDeviceFlow, startDeviceFlow, usableGrant } from './xai-oauth.js'
@@ -174,17 +174,34 @@ function log(ctx, level, message, ...args) {
 
 // ---- credentials ---------------------------------------------------------------
 
-async function readCliAuth(relative) {
+/** A CLI's own login file. ChatGPT and Claude are subscription tokens; Command Code is an API key. */
+async function readCliAuth(preset) {
+  const relative = typeof preset?.cliAuth === 'string' ? preset.cliAuth : ''
+  if (relative === '') return undefined
+  let parsed
   try {
-    const parsed = JSON.parse(await readFile(join(homedir(), relative), 'utf8'))
-    const key = typeof parsed?.apiKey === 'string' ? parsed.apiKey : ''
-    if (key === '') return undefined
-    const account = typeof parsed?.userName === 'string' && parsed.userName !== ''
-      ? parsed.userName
-      : typeof parsed?.userId === 'string' && parsed.userId !== '' ? parsed.userId : undefined
-    return { key, account }
+    parsed = JSON.parse(await readFile(join(homedir(), relative), 'utf8'))
   } catch {
     return undefined
+  }
+  if (preset.cliKind === 'codex') return readCodexAuth(parsed)
+  if (preset.cliKind === 'claude') return readClaudeAuth(parsed)
+  const key = typeof parsed?.apiKey === 'string' ? parsed.apiKey : ''
+  if (key === '') return undefined
+  const account = typeof parsed?.userName === 'string' && parsed.userName !== ''
+    ? parsed.userName
+    : typeof parsed?.userId === 'string' && parsed.userId !== '' ? parsed.userId : undefined
+  return { token: key, account }
+}
+
+/** What `readQuota` needs from a resolved credential. The account id stays off the page. */
+function quotaRequest(target, credential) {
+  return {
+    id: target.id,
+    preset: target.preset,
+    baseURL: target.baseURL,
+    token: credential.token,
+    accountId: credential.accountId,
   }
 }
 
@@ -198,7 +215,7 @@ async function saveXaiGrant(credentials, grant) {
 /** What an API-key target resolves to, and where the value came from. */
 async function keyCredential(credentials, preset, target, timeoutMs) {
   const hint = target.apiKeyEnv ?? preset.apiKeyEnv
-  const credential = { auth: 'key', configured: false, hint }
+  const credential = { auth: preset.auth === 'cli' ? 'cli' : 'key', configured: false, hint }
   if (credentials && hint) {
     try {
       const info = await credentials.describe(hint)
@@ -216,14 +233,24 @@ async function keyCredential(credentials, preset, target, timeoutMs) {
     }
   }
   if (!credential.token && preset.cliAuth) {
-    const local = await readCliAuth(preset.cliAuth)
-    if (local) {
-      credential.configured = true
-      credential.source = 'cli'
-      credential.account = local.account
-      credential.token = local.key
+    const local = await readCliAuth(preset)
+    if (local?.error && !local.token) {
+      credential.error = local.error
       credential.hint = preset.cliAuth
-      credential.writable = false
+    } else if (local?.token) {
+      credential.hint = preset.cliAuth
+      credential.expiresAt = local.expiresAt
+      if (local.expiresAt && Date.parse(local.expiresAt) <= Date.now()) {
+        credential.error = `the ${preset.label} sign-in has expired; sign in again in its CLI`
+      } else {
+        credential.configured = true
+        credential.source = 'cli'
+        credential.account = local.account
+        credential.accountId = local.accountId
+        credential.plan = local.plan
+        credential.token = local.token
+        credential.writable = false
+      }
     }
   }
   return credential
@@ -480,10 +507,13 @@ function createService(ctx, settings, signIn, usage) {
     }
     if (credential.error) card.credential.error = credential.error
     if (!credential.token) {
+      const fallback = preset.auth === 'cli'
+        ? `sign in with the ${preset.label} CLI; this page reads ~/${preset.cliAuth}`
+        : `no credential for ${credential.hint ?? preset.label}`
       return {
         ...card,
         missing: true,
-        error: credential.error ?? `no credential for ${credential.hint ?? preset.label}`,
+        error: credential.error ?? fallback,
       }
     }
 
@@ -494,10 +524,7 @@ function createService(ctx, settings, signIn, usage) {
     }
 
     try {
-      const reading = await readQuota(
-        { id: target.id, preset: target.preset, baseURL: target.baseURL, token: credential.token },
-        { timeoutMs: settings.timeoutMs, planCache },
-      )
+      const reading = await readQuota(quotaRequest(target, credential), { timeoutMs: settings.timeoutMs, planCache })
       // The tightest window first: the number that decides whether the next
       // request works is the one worth reading first.
       const windows = (Array.isArray(reading.windows) ? reading.windows : [])
@@ -510,7 +537,7 @@ function createService(ctx, settings, signIn, usage) {
         windows,
         worst,
         alert: alertOf(worst, reading.balance, settings),
-        plan: reading.plan,
+        plan: reading.plan ?? credential.plan,
         until: reading.until,
         renew: reading.renew,
         balance: reading.balance,
@@ -568,6 +595,7 @@ function createService(ctx, settings, signIn, usage) {
           auth: preset.auth,
           addsModels: Boolean(preset.model),
           modelProvider: preset.model?.provider ?? null,
+          cliFile: preset.cliAuth ?? null,
         })),
         showChip: settings.showChip,
         predict: settings.predict,
@@ -767,6 +795,7 @@ function registerRoutes(ctx, service, settings, signIn) {
     const target = targetOf(service, body.id)
     if (!target) return jsonError(res, 404, 'unknown-provider')
     const preset = PRESETS[target.preset]
+    if (preset.auth === 'cli') return jsonError(res, 400, 'this sign-in lives in the CLI; sign out there')
     const credentials = ctx.get('credentials')
     if (!credentials) return jsonError(res, 503, 'this composition mounts no credential store')
     try {
@@ -808,7 +837,7 @@ function registerRoutes(ctx, service, settings, signIn) {
     try {
       const measured = preset.probe
         ? await probeTarget({ ...target, token: credential.token }, { timeoutMs: settings.timeoutMs })
-        : await readQuota({ ...target, token: credential.token }, { timeoutMs: settings.timeoutMs, planCache: new Map() })
+        : await readQuota(quotaRequest(target, credential), { timeoutMs: settings.timeoutMs, planCache: new Map() })
       const detail = typeof measured?.count === 'number'
         ? `${measured.count} models`
         : `${Array.isArray(measured?.windows) ? measured.windows.length : 0} windows`

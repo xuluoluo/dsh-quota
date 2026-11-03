@@ -62,6 +62,11 @@ window.__ModuleLoader__.load({
       keyProject: '来自项目 .env',
       keyUser: '来自 ~/.dsh/.env',
       keyCli: '使用 Command Code CLI 的登录',
+      cliTitle: '本机登录',
+      cliChatGpt: '使用 Codex 的 ChatGPT 登录',
+      cliClaude: '使用 Claude Code 的登录',
+      addCliKind: '本机登录',
+      addCliHint: '额度来自本机 CLI 的登录，不用贴 key。',
       keyMissing: '未设置',
       keyPlaceholder: '粘贴 API key（只写进 DSH 凭据库）',
       save: '保存',
@@ -80,7 +85,7 @@ window.__ModuleLoader__.load({
       openPage: '打开授权页',
       orEnterCode: '或手动输入这个代码',
       cancel: '取消',
-      intro: '每个数字都来自厂商自己的接口：OpenCode Go 的滚动 / 每周 / 每月三个窗口，Grok 订阅的本期额度，Command Code 的 5 小时 / 每周窗口加当月 credits。密钥只写进 DSH 凭据库，插件不留副本；Grok 登录写的就是 DSH 自己那条凭据记录，所以这里登录完，DSH 里也能直接用 Grok。',
+      intro: '每个数字都来自厂商自己的接口：OpenCode Go 的滚动 / 每周 / 每月三个窗口，Grok 订阅的本期额度，Command Code 的 5 小时 / 每周窗口加当月 credits，ChatGPT 订阅（Codex 登录）的 5 小时 / 一周，Claude 订阅（Claude Code 登录）的 5 小时 / 7 天。密钥只写进 DSH 凭据库，插件不留副本；ChatGPT 和 Claude 只读本机 CLI 的登录，不另存一份。',
       win_rolling: '滚动窗口',
       win_fiveHour: '5 小时',
       win_weekly: '一周',
@@ -92,6 +97,11 @@ window.__ModuleLoader__.load({
       win_onDemand: '按需',
       win_credits: '当月额度',
       win_period: '本期',
+      win_sonnet: 'Sonnet',
+      win_opus: 'Opus',
+      win_cowork: 'Cowork',
+      win_apps: '应用',
+      win_review: '代码审查',
       // 用量
       usageTitle: '用量',
       usageRange: '近 7 天',
@@ -208,6 +218,11 @@ window.__ModuleLoader__.load({
       keyProject: 'From the project .env',
       keyUser: 'From ~/.dsh/.env',
       keyCli: 'Using the Command Code CLI sign-in',
+      cliTitle: 'This machine',
+      cliChatGpt: 'Using the Codex ChatGPT sign-in',
+      cliClaude: 'Using the Claude Code sign-in',
+      addCliKind: 'Local sign-in',
+      addCliHint: 'The allowance is read from the CLI login on this machine. No key to paste.',
       keyMissing: 'Not set',
       keyPlaceholder: 'Paste an API key (written to the DSH credential store)',
       save: 'Save',
@@ -226,7 +241,7 @@ window.__ModuleLoader__.load({
       openPage: 'Open the approval page',
       orEnterCode: 'or enter this code by hand',
       cancel: 'Cancel',
-      intro: 'Every number comes from the vendor\'s own endpoint: the OpenCode Go rolling, weekly and monthly windows, the Grok subscription period, and Command Code\'s five-hour and weekly windows plus the month\'s credits. Keys are written to the DSH credential store only; this plugin keeps no copy. Grok\'s sign-in writes the credential record DSH itself reads, so approving here also makes Grok usable in DSH.',
+      intro: 'Every number comes from the vendor\'s own endpoint: the OpenCode Go rolling, weekly and monthly windows, the Grok subscription period, Command Code\'s five-hour and weekly windows plus the month\'s credits, the ChatGPT subscription windows Codex reports, and the Claude subscription windows Claude Code reports. Keys are written to the DSH credential store only; this plugin keeps no copy. ChatGPT and Claude are read from the CLI login on this machine.',
       win_rolling: 'rolling',
       win_fiveHour: '5-hour',
       win_weekly: 'week',
@@ -238,6 +253,11 @@ window.__ModuleLoader__.load({
       win_onDemand: 'On-demand',
       win_credits: 'Month credits',
       win_period: 'Period',
+      win_sonnet: 'Sonnet',
+      win_opus: 'Opus',
+      win_cowork: 'Cowork',
+      win_apps: 'Apps',
+      win_review: 'Code review',
       usageTitle: 'Usage',
       usageRange: 'last 7 days',
       uToday: 'Today',
@@ -365,6 +385,11 @@ window.__ModuleLoader__.load({
       'on-demand': 'win_onDemand',
       credits: 'win_credits',
       period: 'win_period',
+      sonnet: 'win_sonnet',
+      opus: 'win_opus',
+      cowork: 'win_cowork',
+      apps: 'win_apps',
+      review: 'win_review',
     }
     function windowLabel(t, key) {
       return t(WINDOW_KEYS[String(key)] || 'win_period')
@@ -853,9 +878,13 @@ window.__ModuleLoader__.load({
     }
 
     // —— 凭据区 ——
-    function credentialState(t, credential) {
+    function credentialState(t, credential, card) {
       if (!credential || !credential.configured) return t('keyMissing')
-      if (credential.source === 'cli') return t('keyCli')
+      if (credential.source === 'cli') {
+        if (card && card.preset === 'chatgpt') return t('cliChatGpt')
+        if (card && card.preset === 'claude') return t('cliClaude')
+        return t('keyCli')
+      }
       if (credential.source === 'record') return t('oauthSignedIn')
       if (credential.source === 'env') return t('keyEnv')
       if (credential.source === 'project-env') return t('keyProject')
@@ -869,7 +898,7 @@ window.__ModuleLoader__.load({
       var credential = card.credential || {}
       var busy = Boolean(props.busy)
       var draft = props.draft || ''
-      var state = credentialState(t, credential)
+      var state = credentialState(t, credential, card)
       var detail = credential.account ? ' · ' + credential.account : ''
       if (credential.expiresAt) detail += ' · ' + t('oauthExpires') + formatTime(credential.expiresAt)
 
@@ -888,6 +917,17 @@ window.__ModuleLoader__.load({
           }, credential.configured ? t('signInAgain') : t('signIn')),
           credential.configured
             ? h('button', { type: 'button', style: buttonQuiet, disabled: busy, onClick: props.onSignOut }, t('signOut'))
+            : null)
+      }
+
+      if (credential.auth === 'cli') {
+        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+          status,
+          credential.hint
+            ? h('code', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: C.minor } }, credential.hint)
+            : null,
+          credential.configured
+            ? h('button', { type: 'button', style: buttonQuiet, disabled: busy, onClick: props.onTest }, busy ? t('testing') : t('testKey'))
             : null)
       }
 
@@ -1283,7 +1323,8 @@ window.__ModuleLoader__.load({
 
       h('div', { style: { borderTop: '1px solid ' + C.border, paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' } },
         h('div', { style: { fontSize: '11px', color: C.minor, textTransform: 'uppercase', letterSpacing: '.04em' } },
-          card.credential && card.credential.auth === 'oauth' ? t('oauthTitle') : t('keyTitle')),
+          card.credential && card.credential.auth === 'oauth' ? t('oauthTitle')
+            : card.credential && card.credential.auth === 'cli' ? t('cliTitle') : t('keyTitle')),
         h(CredentialRow, {
           t: t,
           card: card,
@@ -1517,7 +1558,7 @@ window.__ModuleLoader__.load({
             onChange: function (event) { presetState[1](event.target.value) },
             style: Object.assign({}, field, { minWidth: '210px' }),
           }, open.map(function (item) {
-            var kind = item.auth === 'oauth' ? t('addOauthKind') : 'API key'
+            var kind = item.auth === 'oauth' ? t('addOauthKind') : item.auth === 'cli' ? t('addCliKind') : 'API key'
             var models = item.addsModels ? '' : ' · ' + t('quotaOnly')
             return h('option', { key: item.id, value: item.id }, item.label + ' · ' + kind + models)
           })),
@@ -1537,7 +1578,10 @@ window.__ModuleLoader__.load({
               onChange: function (event) { edit('key', event.target.value) },
               style: Object.assign({}, field, { flex: '1', minWidth: '220px' }),
             })
-            : h('span', { style: { fontSize: '11px', color: C.minor, flex: '1', minWidth: '200px' } }, t('addOauthHint')),
+            : h('span', { style: { fontSize: '11px', color: C.minor, flex: '1', minWidth: '200px' } },
+              preset && preset.auth === 'cli'
+                ? t('addCliHint') + (preset.cliFile ? ' ~/' + preset.cliFile : '')
+                : t('addOauthHint')),
           h('button', {
             type: 'button',
             style: Object.assign({}, buttonPrimary, busy || !preset ? disabledStyle : {}),

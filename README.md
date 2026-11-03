@@ -33,6 +33,8 @@ DSH 的模型选择器只告诉你「用哪个模型」，不告诉你「这个 
 | Grok（SuperGrok / X Premium） | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` | `config.creditUsagePercent`、`currentPeriod`、`productUsage`（GrokBuild / Cursor / GrokBot 分项）、`prepaidBalance`、有 cap 时的 `onDemand*` |
 | Command Code | `GET https://api.commandcode.ai/alpha/billing/credits`<br>`GET https://api.commandcode.ai/alpha/billing/subscriptions` | `windowLimits.fiveHour / weekly` 的 `used/cap/resetAt`；`credits.monthlyCredits + purchasedCredits + freeCredits` 当月余额；订阅给出套餐名（Go / Pro / GOAT / Max / Ultra）、到期与是否续费 |
 | DeepSeek 官方 API | `GET https://api.deepseek.com/user/balance` | `is_available`，以及 `balance_infos[0]` 的 `total_balance / granted_balance / topped_up_balance`（按币种取符号：CNY `¥`、USD `$`） |
+| ChatGPT 订阅（Plus / Pro / Team，和 Codex 共用） | `GET https://chatgpt.com/backend-api/wham/usage` | `rate_limit` 的窗口。按 `limit_window_seconds` 认成 5 小时或一周（团队套餐现在常常只回一周，而且放在 `primary_window` 上）。套餐名来自 `plan_type`。登录读 `~/.codex/auth.json` 的 ChatGPT access token，不是 OpenAI API key |
+| Claude 订阅（Pro / Max，和 Claude Code 共用） | `GET https://api.anthropic.com/api/oauth/usage` | `five_hour` / `seven_day` 的 `utilization`（已经是 0–100 的百分比）和 `resets_at`。有单独的 Sonnet / Opus 窗口才画。套餐名来自 `~/.claude/.credentials.json` 的 `subscriptionType` |
 | 阿里云百炼 | —— | 没有公开的余额 / 用量接口（账单在阿里云 Billing API，要 AccessKey，不是 DashScope key），所以这张卡**只存 key**，不编数字 |
 
 Command Code 的 `billing/credits` 不告诉你套餐，而当月额度的分母是套餐给的（GOAT = $70/月），
@@ -144,8 +146,9 @@ ali:
 不是插件内部的状态文件 —— 所以重启、升级都还在，也能被别的工具读到。**没有内置供应商**：
 不配置就是空页，不会替用户初始化五张卡。
 
-现在有五种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、
-`deepseek-api`（只有余额）、`bailian`（只存 key）。已经加过的厂商不再出现在下拉里。
+现在有七种预设：`opencode-go`、`xai-billing`（Grok，走设备码登录）、`commandcode`、
+`deepseek-api`（只有余额）、`bailian`（只存 key）、`chatgpt`（ChatGPT 订阅，读 Codex 登录）、
+`claude`（Claude 订阅，读 Claude Code 登录）。已经加过的厂商不再出现在下拉里。
 
 **添加时同时接模型**，这就是它和以前不一样的地方：
 
@@ -155,6 +158,8 @@ ali:
 | `xai-billing`（Grok） | 补 `xai: {}`，认证走登录记录（写 `apiKeyEnv` 会盖掉登录，所以不写） |
 | `bailian` | 目录里没有：写完整路由（`api` / `baseURL` / `models`） |
 | `commandcode` | 没有可用的聊天接口：只做额度，卡片上标「仅额度」 |
+| `chatgpt` | 只做额度。读 `~/.codex/auth.json` 里的 ChatGPT 登录（`codex login`），不问 API key |
+| `claude` | 只做额度。读 `~/.claude/.credentials.json` 里的 Claude Code 登录，不问 API key |
 
 写失败时额度行不会落盘 —— 不会出现「卡片有、模型里没有」的半截状态。与凭据有关的规则
 没变：**`apiKeyEnv` 填的是名字，不是 key**（填成 key 会被 400 拒掉；配置里已经是 key 形状

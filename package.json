@@ -1,13 +1,13 @@
 {
   "name": "dsh-allowance",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/xuluoluo/dsh-quota.git"
   },
-  "description": "Shows the remaining allowance of OpenCode Go, Grok and Command Code in DSH, adds model providers with their key, counts token usage and cost, warns at thresholds, predicts the next message as ghost text, reads the DeepSeek API balance, stores their API keys, runs Grok's sign-in, and shows the working folder plus git branch beside the composer.",
+  "description": "Shows the remaining allowance of OpenCode Go, Grok, Command Code, ChatGPT and Claude in DSH, adds model providers with their key, counts token usage and cost, warns at thresholds, predicts the next message as ghost text, reads the DeepSeek API balance, stores their API keys, runs Grok's sign-in, reads the ChatGPT and Claude subscription windows from the local CLI login, and shows the working folder plus git branch beside the composer.",
   "exports": {
     ".": "./build/index.js",
     "./client": "./build/client.js",

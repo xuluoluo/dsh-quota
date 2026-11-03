@@ -19,6 +19,15 @@
  *   plan's five-hour and weekly windows as used/cap, and the month's credits
  *   as dollars left; `…/alpha/billing/subscriptions` names the plan, which is
  *   what the monthly allotment — and so the credits window — is read from.
+ * - ChatGPT subscription, as Codex reads it
+ *   (`GET https://chatgpt.com/backend-api/wham/usage`): `rate_limit`'s
+ *   primary and secondary windows. A window is five-hour or weekly by its
+ *   `limit_window_seconds`, not by which field it arrived in — a team plan
+ *   currently reports only the week, under `primary_window`.
+ * - Claude Pro/Max, as Claude Code reads it
+ *   (`GET https://api.anthropic.com/api/oauth/usage`): `five_hour` and
+ *   `seven_day` utilization, plus a model window when the reply actually
+ *   carries one. `utilization` is already a 0–100 percentage.
  */
 
 const DEFAULT_TIMEOUT_MS = 8000
@@ -89,6 +98,33 @@ export const PRESETS = Object.freeze({
         { id: 'qwen3.8-flash', name: 'Qwen3.8 Flash' },
       ],
     },
+  },
+  /**
+   * ChatGPT Plus / Pro / Team, shared with Codex. The subscription window is
+   * not on an API key — Codex's own login (`~/.codex/auth.json`) is what
+   * `wham/usage` accepts. Quota only: that login is not an OpenAI API key.
+   */
+  chatgpt: {
+    id: 'chatgpt',
+    label: 'ChatGPT',
+    auth: 'cli',
+    cliAuth: '.codex/auth.json',
+    cliKind: 'codex',
+    baseURL: 'https://chatgpt.com/backend-api',
+    model: null,
+  },
+  /**
+   * Claude Pro / Max, shared by claude.ai and Claude Code. The usage endpoint
+   * wants the OAuth access token Claude Code stores, not an Anthropic API key.
+   */
+  claude: {
+    id: 'claude',
+    label: 'Claude',
+    auth: 'cli',
+    cliAuth: '.claude/.credentials.json',
+    cliKind: 'claude',
+    baseURL: 'https://api.anthropic.com',
+    model: null,
   },
 })
 
@@ -400,6 +436,257 @@ async function deepSeekQuota(target, preset, io) {
   return { url, ...readDeepSeekBalance(body) }
 }
 
+// ---- ChatGPT subscription (Codex) ----------------------------------------------
+
+/** A plan id as a card should print it. Unknown ids keep their own capital. */
+export function planLabel(value) {
+  const raw = String(value ?? '').trim()
+  if (raw === '') return undefined
+  const known = {
+    plus: 'Plus',
+    pro: 'Pro',
+    team: 'Team',
+    business: 'Business',
+    enterprise: 'Enterprise',
+    free: 'Free',
+    go: 'Go',
+    max: 'Max',
+    pro_lite: 'Pro Lite',
+    prolite: 'Pro Lite',
+  }
+  const key = raw.toLowerCase().replace(/[\s-]+/g, '_')
+  return known[key] ?? raw.charAt(0).toUpperCase() + raw.slice(1)
+}
+
+/** Claims of a JWT, read and never verified. Undefined when it is not one. */
+function jwtClaims(access) {
+  try {
+    const part = String(access ?? '').split('.')[1]
+    if (!part) return undefined
+    const claims = JSON.parse(Buffer.from(part, 'base64url').toString('utf8'))
+    return isObject(claims) ? claims : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function claimObject(claims, key) {
+  return isObject(claims?.[key]) ? claims[key] : undefined
+}
+
+/** Five hours, a day, a week, a month — from the window's own length. */
+function windowKeyForSeconds(seconds, fallback) {
+  const span = asNumber(seconds)
+  if (span === undefined || span <= 0) return fallback
+  if (span >= 86400 * 25) return 'monthly'
+  if (span >= 172800) return 'weekly'
+  if (span >= 20 * 3600) return 'daily'
+  if (span >= 3 * 3600) return 'five-hour'
+  if (span >= 30 * 60) return 'hourly'
+  return fallback
+}
+
+/**
+ * One Codex rate-limit window. `used_percent` is 0–100 already used;
+ * older replies say `percent_left` instead. The length, not the field name,
+ * decides whether this is the five-hour window or the week.
+ */
+function readRateWindow(raw, fallback) {
+  if (!isObject(raw)) return undefined
+  let used = percent(raw.used_percent ?? raw.usedPercent)
+  if (used === undefined) {
+    const left = percent(raw.percent_left ?? raw.percentLeft)
+    if (left !== undefined) used = percent(100 - left)
+  }
+  if (used === undefined) return undefined
+  return {
+    key: windowKeyForSeconds(raw.limit_window_seconds ?? raw.limitWindowSeconds, fallback),
+    used,
+    resetsAt: isoTime(raw.reset_time_ms) ?? isoTime(raw.resetsAt) ?? isoTime(raw.reset_at),
+  }
+}
+
+function pushWindow(windows, seen, window) {
+  if (!window || seen.has(window.key)) return
+  seen.add(window.key)
+  windows.push(window)
+}
+
+/**
+ * `GET /backend-api/wham/usage`, as Codex's `/status` reads it.
+ * A single present window is enough; `secondary_window: null` is not an error.
+ */
+export function readChatGptUsage(body) {
+  const root = isObject(body?.rate_limit) ? body.rate_limit : isObject(body?.rate_limits) ? body.rate_limits : undefined
+  if (!root) throw new Error('the reply holds no rate limit')
+  const windows = []
+  const seen = new Set()
+  const families = [
+    ['five-hour', ['five_hour', 'primary_window', 'primary']],
+    ['weekly', ['weekly', 'secondary_window', 'secondary']],
+  ]
+  for (const [fallback, names] of families) {
+    let raw
+    for (const name of names) {
+      if (isObject(root[name])) {
+        raw = root[name]
+        break
+      }
+    }
+    pushWindow(windows, seen, readRateWindow(raw, fallback))
+  }
+  const review = isObject(body?.code_review_rate_limit) ? body.code_review_rate_limit : undefined
+  if (review) {
+    const inner = isObject(review.primary_window) ? review.primary_window : review
+    const window = readRateWindow(inner, 'review')
+    if (window) pushWindow(windows, seen, { ...window, key: 'review' })
+  }
+  if (windows.length === 0) throw new Error('the reply holds no readable window')
+
+  const credits = isObject(body?.credits) ? body.credits : undefined
+  let note
+  let balance
+  if (credits?.unlimited === true) note = 'credits are unlimited'
+  else if (credits?.has_credits === true) {
+    const amount = asNumber(credits.balance)
+    if (amount !== undefined) balance = money(amount)
+  }
+  if (credits?.overage_limit_reached === true) note = [note, 'overage limit reached'].filter(Boolean).join(' · ')
+  return { windows, plan: planLabel(body?.plan_type), balance, note }
+}
+
+/** Codex's `auth.json`: the ChatGPT login, or a stated reason it cannot be used. */
+export function readCodexAuth(body) {
+  if (!isObject(body)) return undefined
+  const tokens = isObject(body.tokens) ? body.tokens : {}
+  const access = typeof tokens.access_token === 'string' ? tokens.access_token : ''
+  if (access === '') {
+    if (typeof body.OPENAI_API_KEY === 'string' && body.OPENAI_API_KEY !== '') {
+      return { error: 'Codex is signed in with an API key, which has no ChatGPT subscription window' }
+    }
+    return undefined
+  }
+  const claims = jwtClaims(access)
+  const profile = claimObject(claims, 'https://api.openai.com/profile')
+  const account = typeof profile?.email === 'string' && profile.email !== ''
+    ? profile.email
+    : typeof claims?.email === 'string' && claims.email !== '' ? claims.email : undefined
+  const accountId = typeof tokens.account_id === 'string' && tokens.account_id !== '' ? tokens.account_id : undefined
+  return { token: access, accountId, account, expiresAt: isoTime(claims?.exp) }
+}
+
+async function chatGptQuota(target, preset, io) {
+  const url = `${target.baseURL}/wham/usage`
+  const headers = {
+    authorization: `Bearer ${target.token}`,
+    accept: 'application/json',
+    origin: 'https://chatgpt.com',
+    referer: 'https://chatgpt.com/',
+    'user-agent': 'codex-cli',
+  }
+  if (typeof target.accountId === 'string' && target.accountId !== '') headers['ChatGPT-Account-Id'] = target.accountId
+  const body = await io.fetchJson(url, { headers, signal: io.signal, timeoutMs: io.timeoutMs })
+  return { url, ...readChatGptUsage(body) }
+}
+
+// ---- Claude subscription (Claude Code) ------------------------------------------
+
+/** The windows Claude Code's own status line names. Anything else stays out. */
+const CLAUDE_WINDOWS = Object.freeze([
+  ['five_hour', 'five-hour'],
+  ['seven_day', 'weekly'],
+  ['seven_day_sonnet', 'sonnet'],
+  ['seven_day_opus', 'opus'],
+  ['seven_day_cowork', 'cowork'],
+  ['seven_day_oauth_apps', 'apps'],
+])
+
+/**
+ * `GET /api/oauth/usage`. `utilization` is a percentage, so `1` is 1%, not
+ * full. Null buckets (a Pro plan has no separate Opus window) are skipped.
+ * `seven_day_breakdown` is how the week was spent, not another limit.
+ */
+export function readClaudeUsage(body) {
+  if (!isObject(body)) throw new Error('the reply holds no usage')
+  const windows = []
+  const seen = new Set()
+  for (const [name, key] of CLAUDE_WINDOWS) {
+    const entry = body[name]
+    if (!isObject(entry)) continue
+    const used = percent(entry.utilization ?? entry.percent)
+    if (used === undefined) continue
+    const spent = asNumber(entry.used_dollars)
+    const cap = asNumber(entry.limit_dollars)
+    pushWindow(windows, seen, {
+      key,
+      used,
+      resetsAt: isoTime(entry.resets_at),
+      display: spent !== undefined && cap !== undefined && cap > 0 ? `${money(spent)} / ${money(cap)}` : undefined,
+    })
+  }
+  if (windows.length === 0 && Array.isArray(body.limits)) {
+    for (const entry of body.limits) {
+      if (!isObject(entry)) continue
+      const used = percent(entry.percent)
+      if (used === undefined) continue
+      const kind = String(entry.kind ?? '')
+      const key = kind === 'session' ? 'five-hour' : kind === 'weekly_all' || entry.group === 'weekly' ? 'weekly' : (kind.replace(/_/g, '-') || 'period')
+      pushWindow(windows, seen, { key, used, resetsAt: isoTime(entry.resets_at) })
+    }
+  }
+  const extra = isObject(body.extra_usage) ? body.extra_usage : undefined
+  if (extra?.is_enabled === true) {
+    const spent = asNumber(extra.used_credits)
+    const cap = asNumber(extra.monthly_limit)
+    const used = percent(extra.utilization) ?? (spent !== undefined && cap !== undefined && cap > 0 ? percent((spent / cap) * 100) : undefined)
+    if (used !== undefined) {
+      pushWindow(windows, seen, {
+        key: 'credits',
+        used,
+        display: spent !== undefined && cap !== undefined ? `${money(spent)} / ${money(cap)}` : undefined,
+      })
+    }
+  }
+  if (windows.length === 0) throw new Error('the reply holds no readable window')
+
+  const rows = Array.isArray(body.seven_day_breakdown?.rows) ? body.seven_day_breakdown.rows : []
+  const shares = []
+  for (const row of rows) {
+    const share = asNumber(row?.percent)
+    const name = typeof row?.display_name === 'string' ? row.display_name : ''
+    if (name && share !== undefined && share > 0) shares.push(`${name} ${Math.round(share)}%`)
+  }
+  return { windows, note: shares.length > 0 ? `of the week: ${shares.join(' · ')}` : undefined }
+}
+
+/** Claude Code's `.credentials.json`: the OAuth access token and the plan. */
+export function readClaudeAuth(body) {
+  const oauth = isObject(body?.claudeAiOauth) ? body.claudeAiOauth : isObject(body) ? body : undefined
+  if (!oauth) return undefined
+  const token = typeof oauth.accessToken === 'string' ? oauth.accessToken
+    : typeof oauth.access_token === 'string' ? oauth.access_token : ''
+  if (token === '') return undefined
+  return {
+    token,
+    plan: planLabel(oauth.subscriptionType),
+    expiresAt: isoTime(oauth.expiresAt),
+  }
+}
+
+async function claudeQuota(target, preset, io) {
+  const url = `${target.baseURL}/api/oauth/usage`
+  const body = await io.fetchJson(url, {
+    headers: {
+      authorization: `Bearer ${target.token}`,
+      'anthropic-beta': 'oauth-2025-04-20',
+      'user-agent': 'claude-code',
+    },
+    signal: io.signal,
+    timeoutMs: io.timeoutMs,
+  })
+  return { url, ...readClaudeUsage(body) }
+}
+
 // ---- the reader the Host calls ------------------------------------------------
 
 const READERS = {
@@ -407,6 +694,8 @@ const READERS = {
   'xai-billing': xaiQuota,
   commandcode: commandCodeQuota,
   'deepseek-api': deepSeekQuota,
+  chatgpt: chatGptQuota,
+  claude: claudeQuota,
 }
 
 /**

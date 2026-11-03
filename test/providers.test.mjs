@@ -9,6 +9,11 @@ import path from 'node:path'
 import {
   commandCodeCreditsWindow,
   commandCodePlan,
+  planLabel,
+  readClaudeAuth,
+  readClaudeUsage,
+  readCodexAuth,
+  readChatGptUsage,
   readDeepSeekBalance,
   readCommandCodeCredits,
   readCommandCodeSubscription,
@@ -143,6 +148,103 @@ check('DeepSeek：没有余额就抛错而不是编一个', threwDeepSeek)
     const reading = await readQuota({ id: 'deepseek', preset: 'deepseek-api', token: 'k' }, { timeoutMs: 5000 })
     check('DeepSeek：readQuota 打 /user/balance 并给出余额',
       reading.balance === '¥12.34' && reading.url.endsWith('/user/balance'), JSON.stringify(reading))
+  } finally {
+    globalThis.fetch = realFetch
+  }
+}
+
+// —— ChatGPT 订阅（Codex 的 wham/usage）——
+const plus = readChatGptUsage({
+  plan_type: 'plus',
+  rate_limit: {
+    allowed: true,
+    primary_window: { used_percent: 0, limit_window_seconds: 18000, reset_at: 1793705145 },
+    secondary_window: { used_percent: 20, limit_window_seconds: 604800, reset_at: 1794222563 },
+  },
+  credits: { has_credits: false, unlimited: false, balance: '0' },
+})
+check('ChatGPT：5 小时和一周按窗口长度认，不看字段位置', plus.windows.map((w) => w.key).join() === 'five-hour,weekly')
+check('ChatGPT：已用百分比原样', plus.windows[0].used === 0 && plus.windows[1].used === 20)
+check('ChatGPT：reset_at 是 unix 秒', plus.windows[1].resetsAt === new Date(1794222563 * 1000).toISOString())
+check('ChatGPT：套餐名 Plus', plus.plan === 'Plus')
+check('ChatGPT：没有 credits 时不把余额 0 当成告警', plus.balance === undefined, JSON.stringify(plus))
+check('ChatGPT：团队套餐只回一周时，primary_window 认成 weekly', (() => {
+  const team = readChatGptUsage({
+    plan_type: 'team',
+    rate_limit: { primary_window: { used_percent: 1, limit_window_seconds: 604800, reset_at: 1785260773 }, secondary_window: null },
+  })
+  return team.windows.length === 1 && team.windows[0].key === 'weekly' && team.plan === 'Team'
+})())
+check('ChatGPT：旧的 percent_left 折成已用', Math.round(readChatGptUsage({
+  rate_limit: { five_hour: { percent_left: 73.4, limit_window_seconds: 18000 } },
+}).windows[0].used * 10) / 10 === 26.6)
+let threwChat = false
+try { readChatGptUsage({ rate_limit: { secondary_window: null } }) } catch { threwChat = true }
+check('ChatGPT：一个窗口都没有就抛错', threwChat)
+check('ChatGPT：API key 登录说清楚没有订阅窗口', readCodexAuth({ OPENAI_API_KEY: 'sk-test', tokens: {} })?.error?.includes('API key') === true)
+{
+  const token = ['h', Buffer.from(JSON.stringify({
+    exp: 1793705145,
+    'https://api.openai.com/profile': { email: 'person@example.com' },
+  })).toString('base64url'), 's'].join('.')
+  const auth = readCodexAuth({ auth_mode: 'chatgpt', tokens: { access_token: token, account_id: 'acct-1' } })
+  check('ChatGPT：登录读出 token、账号和过期', auth.token === token && auth.account === 'person@example.com' && auth.accountId === 'acct-1' && auth.expiresAt === new Date(1793705145 * 1000).toISOString(), JSON.stringify({ account: auth.account, expiresAt: auth.expiresAt }))
+}
+
+// —— Claude 订阅（Claude Code 的 oauth/usage）——
+const claude = readClaudeUsage({
+  five_hour: { utilization: 21, resets_at: '2026-11-03T11:19:59.853772+00:00' },
+  seven_day: { utilization: 17, resets_at: '2026-11-09T18:59:59.853795+00:00' },
+  seven_day_opus: null,
+  seven_day_sonnet: null,
+  extra_usage: { is_enabled: false, utilization: null },
+  seven_day_breakdown: { rows: [
+    { key: 'claude_code', display_name: 'Claude Code', percent: 100 },
+    { key: 'chat', display_name: 'Chats', percent: 0 },
+  ] },
+})
+check('Claude：5 小时和 7 天，空桶丢掉', claude.windows.map((w) => `${w.key}:${w.used}`).join() === 'five-hour:21,weekly:17')
+check('Claude：重置时间是 ISO', claude.windows[0].resetsAt === new Date('2026-11-03T11:19:59.853772+00:00').toISOString())
+check('Claude：本周构成写进 note，不当成另一条额度', claude.note === 'of the week: Claude Code 100%' && !claude.windows.some((w) => w.key === 'credits'))
+check('Claude：额外用量开着时才有当月额度', (() => {
+  const extra = readClaudeUsage({
+    five_hour: { utilization: 1, resets_at: '2026-11-03T11:19:59.000Z' },
+    extra_usage: { is_enabled: true, utilization: 40, used_credits: 8, monthly_limit: 20 },
+  })
+  const credits = extra.windows.find((w) => w.key === 'credits')
+  return credits?.used === 40 && credits.display === '$8.00 / $20.00'
+})())
+check('Claude：只有 limits 数组时也能读', readClaudeUsage({
+  limits: [{ kind: 'session', percent: 21, resets_at: '2026-11-03T11:19:59.000Z' }],
+}).windows[0].key === 'five-hour')
+check('Claude：1% 就是 1%，不当成用满', readClaudeUsage({ five_hour: { utilization: 1 } }).windows[0].used === 1)
+check('Claude：登录给出套餐', readClaudeAuth({ claudeAiOauth: { accessToken: 'tok', subscriptionType: 'pro', expiresAt: 1793705145000 } })?.plan === 'Pro')
+check('套餐名：max 是 Max', planLabel('max') === 'Max' && planLabel('') === undefined)
+let threwClaude = false
+try { readClaudeUsage({ five_hour: null, extra_usage: { is_enabled: false } }) } catch { threwClaude = true }
+check('Claude：没有窗口就抛错', threwClaude)
+
+{
+  const realFetch = globalThis.fetch
+  const seen = []
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), account: init?.headers?.['ChatGPT-Account-Id'], beta: init?.headers?.['anthropic-beta'] })
+    if (String(url).endsWith('/wham/usage')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({
+        plan_type: 'plus',
+        rate_limit: { primary_window: { used_percent: 4, limit_window_seconds: 18000, reset_at: 1793705145 } },
+      }) }
+    }
+    if (String(url).endsWith('/api/oauth/usage')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ five_hour: { utilization: 21, resets_at: '2026-11-03T11:19:59.000Z' } }) }
+    }
+    throw new Error(`unexpected ${url}`)
+  }
+  try {
+    const chat = await readQuota({ id: 'chatgpt', preset: 'chatgpt', token: 'tok', accountId: 'acct-1' }, { timeoutMs: 5000 })
+    check('ChatGPT：readQuota 打 wham/usage 并带上账号', chat.plan === 'Plus' && chat.windows[0].key === 'five-hour' && seen[0].account === 'acct-1', JSON.stringify(seen[0]))
+    const anthropic = await readQuota({ id: 'claude', preset: 'claude', token: 'tok' }, { timeoutMs: 5000 })
+    check('Claude：readQuota 打 oauth/usage 并带 beta 头', anthropic.windows[0].used === 21 && seen[1].beta === 'oauth-2025-04-20' && anthropic.url.endsWith('/api/oauth/usage'), JSON.stringify(seen[1]))
   } finally {
     globalThis.fetch = realFetch
   }
