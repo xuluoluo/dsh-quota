@@ -15,7 +15,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PRICES } from './prices.js'
 import { DEFAULT_PROMPT, createPredictor } from './prediction.js'
-import { PRESETS, probeTarget, readClaudeAuth, readCodexAuth, readQuota, worstOf } from './providers.js'
+import { PRESETS, orderWindows, probeTarget, readClaudeAuth, readCodexAuth, readQuota, worstOf } from './providers.js'
 import { createUsageStore, usageFile } from './usage.js'
 import { createWorkspaceProbe } from './workspace.js'
 import { XAI_OAUTH, accountOf, pollDeviceFlow, startDeviceFlow, usableGrant } from './xai-oauth.js'
@@ -525,11 +525,9 @@ function createService(ctx, settings, signIn, usage) {
 
     try {
       const reading = await readQuota(quotaRequest(target, credential), { timeoutMs: settings.timeoutMs, planCache })
-      // The tightest window first: the number that decides whether the next
-      // request works is the one worth reading first.
-      const windows = (Array.isArray(reading.windows) ? reading.windows : [])
-        .slice()
-        .sort((a, b) => (b?.used ?? 0) - (a?.used ?? 0))
+      // 5-hour first: that is the limit that stops the next request. The rest
+      // stay fullest-first, and the alert still watches the fullest of all.
+      const windows = orderWindows(reading.windows)
       const worst = worstOf(windows) ?? null
       return {
         ...card,

@@ -17,9 +17,11 @@ import {
   readDeepSeekBalance,
   readCommandCodeCredits,
   readCommandCodeSubscription,
+  orderWindows,
   readOpenCodeUsage,
   readQuota,
   readXaiBilling,
+  headlineOf,
   worstOf,
 } from '../build/providers.js'
 
@@ -96,6 +98,17 @@ check('Command Code：success:false 抛错而不是当成没有套餐', (() => {
 })())
 
 check('worstOf 取最坏窗口', worstOf([{ used: 3 }, { used: 91 }, { used: 20 }]).used === 91)
+check('窄条优先 5 小时，不看谁更满', headlineOf([
+  { key: 'weekly', used: 80 },
+  { key: 'monthly', used: 90 },
+  { key: 'five-hour', used: 12 },
+]).key === 'five-hour')
+check('没有 5 小时就退回最满的窗口', headlineOf([{ key: 'weekly', used: 20 }, { key: 'monthly', used: 60 }]).key === 'monthly')
+check('窗口顺序：5 小时在前，其余按已用', orderWindows([
+  { key: 'monthly', used: 90 },
+  { key: 'five-hour', used: 12 },
+  { key: 'weekly', used: 40 },
+]).map((w) => w.key).join() === 'five-hour,monthly,weekly')
 check('worstOf 忽略没有数字的窗口', worstOf([{ used: 3 }, {}]).used === 3)
 
 // —— Command Code：订阅接口挂了，窗口照出，只是没有套餐 ——

@@ -215,8 +215,8 @@ check('Grok 卡：周窗口 + 分项 + 已登录账号', cards.grok.windows[0].k
 check('Command Code 卡：套餐 GOAT + 三个窗口（含当月 credits）',
   cards.commandcode.plan === 'GOAT' && cards.commandcode.windows.map((w) => w.key).sort().join() === 'credits,five-hour,weekly')
 check('Command Code 卡：5 小时窗口 7/14 = 50%', cards.commandcode.windows.find((w) => w.key === 'five-hour').used === 50)
-check('窗口按最紧的排在最前', cards.commandcode.windows[0].key === 'credits' &&
-  cards.commandcode.windows.map((w) => w.used).every((used, index, all) => index === 0 || all[index - 1] >= used),
+check('5 小时窗口排在最前，其余按已用', cards.commandcode.windows[0].key === 'five-hour' &&
+  cards.commandcode.windows.slice(1).map((w) => w.used).every((used, index, all) => index === 0 || all[index - 1] >= used),
   JSON.stringify(cards.commandcode.windows))
 check('Command Code 卡：到期与续费来自订阅', cards.commandcode.until === '2026-10-22T11:40:10.000Z' && cards.commandcode.renew === 'off')
 check('卡里带了取 key 的地址', typeof cards['opencode-go'].keysUrl === 'string' && cards['opencode-go'].keysUrl.startsWith('https://'))

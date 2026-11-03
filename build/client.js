@@ -395,6 +395,33 @@ window.__ModuleLoader__.load({
       return t(WINDOW_KEYS[String(key)] || 'win_period')
     }
 
+    // 窄条只有一个数字。有 5 小时窗口时显示它，周和月再满也不抢这一格；
+    // 没有 5 小时窗口时才退回用得最多的那个。
+    function shownWindow(card) {
+      var windows = Array.isArray(card.windows) ? card.windows : []
+      for (var i = 0; i < windows.length; i++) {
+        if (windows[i] && windows[i].key === 'five-hour' && typeof windows[i].used === 'number') return windows[i]
+      }
+      return card.worst && typeof card.worst.used === 'number' ? card.worst : null
+    }
+    function shownValue(t, card) {
+      var shown = shownWindow(card)
+      if (!shown) return card.balance || t('never')
+      var many = Array.isArray(card.windows) && card.windows.length > 1
+      var prefix = shown.key === 'five-hour' && many ? windowLabel(t, 'five-hour') + ' ' : ''
+      return prefix + percentOf(shown.used) + '%'
+    }
+    function orderedWindows(card) {
+      var windows = Array.isArray(card.windows) ? card.windows.slice() : []
+      windows.sort(function (a, b) {
+        var ar = a && a.key === 'five-hour' ? 0 : 1
+        var br = b && b.key === 'five-hour' ? 0 : 1
+        if (ar !== br) return ar - br
+        return ((b && b.used) || 0) - ((a && a.used) || 0)
+      })
+      return windows
+    }
+
     // —— 取数 ——
     function request(path, options, signal) {
       var controller = new AbortController()
@@ -600,15 +627,9 @@ window.__ModuleLoader__.load({
           cursor: 'pointer', userSelect: 'none', padding: '0 2px',
         },
       }, cards.map(function (card) {
-        var worst = card.worst && typeof card.worst.used === 'number' ? card.worst : null
-        var tone = card.error ? 'error' : toneOf(worst ? worst.used : undefined)
-        var detail = card.error
-          ? card.error
-          : (card.windows || []).map(function (win) {
-            return windowLabel(t, win.key) + ' ' + percentOf(win.used) + '%' +
-              (win.resetsAt ? ' · ' + t('resetsIn') + relativeReset(win.resetsAt, t) : '')
-          }).join('\n')
-        var value = card.error ? '!' : worst ? percentOf(worst.used) + '%' : (card.balance || t('never'))
+        var shown = shownWindow(card)
+        var tone = card.error ? 'error' : toneOf(shown ? shown.used : undefined)
+        var value = card.error ? '!' : shownValue(t, card)
         return h('span', {
           key: card.id,
           title: cardTooltip(t, card),
@@ -647,11 +668,11 @@ window.__ModuleLoader__.load({
         },
       },
       cards.map(function (card) {
-        var worst = card.worst && typeof card.worst.used === 'number' ? card.worst : null
+        var shown = shownWindow(card)
         var tone = card.alert === 'critical'
           ? 'error'
-          : card.alert === 'warn' ? 'warn' : card.error ? 'error' : toneOf(worst ? worst.used : undefined)
-        var value = card.error ? '!' : worst ? percentOf(worst.used) + '%' : (card.balance || t('never'))
+          : card.alert === 'warn' ? 'warn' : card.error ? 'error' : toneOf(shown ? shown.used : undefined)
+        var value = card.error ? '!' : shownValue(t, card)
         return h('span', {
           key: card.id,
           title: cardTooltip(t, card),
@@ -667,7 +688,7 @@ window.__ModuleLoader__.load({
     /** 悬停时看的全量额度：每家每个窗口一行，带剩余与重置倒计时。 */
     function cardTooltip(t, card) {
       var lines = [card.label]
-      var windows = Array.isArray(card.windows) ? card.windows : []
+      var windows = orderedWindows(card)
       windows.forEach(function (win) {
         var used = percentOf(win.used)
         var reset = win.resetsAt ? relativeReset(win.resetsAt, t) : ''
@@ -1221,7 +1242,7 @@ window.__ModuleLoader__.load({
     function Card(props) {
       var t = props.t
       var card = props.card
-      var windows = Array.isArray(card.windows) ? card.windows : []
+      var windows = orderedWindows(card)
       var term = ''
       if (card.until) {
         var lead = card.renew === 'off' ? t('untilOff') : card.renew === 'auto' ? t('untilAuto') : t('untilPlain')

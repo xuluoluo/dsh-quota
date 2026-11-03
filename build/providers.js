@@ -789,7 +789,28 @@ export async function probeTarget(target, io = {}) {
   return { url, count: list.length }
 }
 
-/** The worst window of a card: what a compact chip shows. */
+/**
+ * The window a compact strip should print. A 5-hour limit is what blocks the
+ * next request, so it wins over a fuller week or month. Without one, the
+ * fullest window is still the number worth showing.
+ */
+export function headlineOf(windows) {
+  const list = Array.isArray(windows) ? windows : []
+  const fiveHour = list.find((window) => window?.key === 'five-hour' && typeof window.used === 'number')
+  return fiveHour ?? worstOf(list)
+}
+
+/** 5-hour first, then the remaining windows from fullest to emptiest. */
+export function orderWindows(windows) {
+  return (Array.isArray(windows) ? windows : []).slice().sort((a, b) => {
+    const rank = (window) => (window?.key === 'five-hour' ? 0 : 1)
+    const byRank = rank(a) - rank(b)
+    if (byRank !== 0) return byRank
+    return (b?.used ?? 0) - (a?.used ?? 0)
+  })
+}
+
+/** The worst window of a card: what raises an alert, not what the strip prints. */
 export function worstOf(windows) {
   let worst
   for (const window of windows ?? []) {

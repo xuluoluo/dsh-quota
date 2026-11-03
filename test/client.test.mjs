@@ -358,7 +358,8 @@ let chipTexts = textsOf(mini.tree)
 check('chip 渲染出各个 provider',
   ['OpenCode Go', 'Grok', 'Command Code', 'DeepSeek API', 'Alibaba Bailian', 'ChatGPT', 'Claude'].every((name) => chipTexts.includes(name)),
   JSON.stringify(chipTexts))
-check('chip 显示最坏窗口的百分比', chipTexts.includes('33%') && chipTexts.includes('100%') && chipTexts.includes('93%'),
+check('chip 有 5 小时就显示它，没有才显示最满的',
+  chipTexts.includes('33%') && chipTexts.includes('100%') && chipTexts.join('').includes('5 小时 50%') && !chipTexts.includes('93%'),
   JSON.stringify(chipTexts))
 check('没有窗口的余额卡在 chip 上显示金额', chipTexts.includes('¥110.00'), JSON.stringify(chipTexts))
 
