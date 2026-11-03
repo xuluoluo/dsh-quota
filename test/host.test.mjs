@@ -12,6 +12,11 @@ import { apply, ROUTES } from '../build/index.js'
 // The usage counters live in the DSH home; this run gets a directory of its own.
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-home-'))
 process.env.DSH_HOME = testHome
+// All CLI credential lookups stay within synthetic directories, including on Windows.
+process.env.HOME = testHome
+process.env.USERPROFILE = testHome
+process.env.CODEX_HOME = path.join(testHome, 'empty-codex')
+process.env.CLAUDE_CONFIG_DIR = path.join(testHome, 'empty-claude')
 
 let failures = 0
 const check = (name, ok, detail = '') => {
@@ -59,6 +64,10 @@ globalThis.fetch = async (input, init = {}) => {
         planId: 'individual-goat', status: 'active',
         currentPeriodEnd: '2026-10-22T11:40:10.000Z', cancelAtPeriodEnd: true,
       } })
+    case 'chatgpt.com/backend-api/wham/usage':
+      return response({ rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 18000 } } })
+    case 'api.anthropic.com/api/oauth/usage':
+      return response({ five_hour: { utilization: 23 } })
     case 'api.deepseek.com/user/balance':
       return response({
         is_available: true,
@@ -303,6 +312,58 @@ const second = await call(ROUTES.loginStart, { method: 'POST', body: { id: 'grok
 check('再登一次又是 pending', second.status === 200 && second.json.status === 'pending')
 check('取消登录回 ok', (await call(ROUTES.loginCancel, { method: 'POST', body: { id: 'grok' } })).json.ok === true)
 check('取消后状态不再是 pending', (await call(ROUTES.loginStatus, { url: `${ROUTES.loginStatus}?id=grok` })).json.status !== 'pending')
+
+// 自定义 Grok 记录必须贯穿读取、续期、登录与清除，默认记录不得被覆盖。
+const customRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => name === 'credentials' ? credentials : undefined,
+  effect: (fn) => fn(), on: () => () => {},
+  webServer: { register: (route) => { customRoutes.set(route.path, route.handler); return () => {} } },
+}, { providers: [{ id: 'custom-grok', preset: 'xai-billing', record: 'custom/grok' }] })
+const customCall = (route, options) => callOn(customRoutes, route, options)
+const defaultGrant = { kind: 'grant', payload: { type: 'oauth', access: 'default-sentinel', refresh: 'default-refresh', expires: Date.now() + 3600_000 } }
+records.set('llm-pi-ai/xai', defaultGrant)
+records.set('custom/grok', { kind: 'grant', payload: { type: 'oauth', access: 'old', refresh: 'custom-refresh', expires: Date.now() + 30_000 } })
+const customRefresh = await customCall(ROUTES.refresh, { method: 'POST' })
+check('Grok 自定义记录续期写回原记录', customRefresh.json.providers[0].credential.account === 'refreshed@example.com' && records.get('custom/grok').payload.refresh === 'custom-refresh' && records.get('custom/grok').payload.access !== 'old')
+check('Grok 自定义记录续期不覆盖默认记录', records.get('llm-pi-ai/xai') === defaultGrant)
+records.delete('custom/grok')
+deviceApproved = true
+const customLogin = await customCall(ROUTES.loginStart, { method: 'POST', body: { id: 'custom-grok' } })
+check('Grok 自定义记录登录启动', customLogin.status === 200)
+check('Grok 登录写入自定义记录', await waitFor(() => records.has('custom/grok')) && records.get('custom/grok').payload.refresh === 'refresh-1')
+check('Grok 自定义登录不覆盖默认记录', records.get('llm-pi-ai/xai') === defaultGrant)
+check('Grok 自定义记录可清除', (await customCall(ROUTES.clear, { method: 'POST', body: { id: 'custom-grok' } })).status === 200 && !records.has('custom/grok') && records.get('llm-pi-ai/xai') === defaultGrant)
+records.delete('llm-pi-ai/xai')
+
+// CLI 文件均为临时目录中的合成数据；自定义目录优先，缺文件不回退。
+const codexDir = path.join(testHome, 'custom-codex')
+const claudeDir = path.join(testHome, 'custom-claude')
+for (const dir of [codexDir, claudeDir, path.join(testHome, '.codex'), path.join(testHome, '.claude')]) fs.mkdirSync(dir, { recursive: true })
+const codexFile = (dir, email) => fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify({ tokens: { access_token: jwt({ email }) } }))
+const claudeFile = (dir, plan) => fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: `fake-${plan}`, subscriptionType: plan, expiresAt: Date.now() + 3600_000 } }))
+codexFile(codexDir, 'custom@example.com')
+codexFile(path.join(testHome, '.codex'), 'default@example.com')
+claudeFile(claudeDir, 'max')
+claudeFile(path.join(testHome, '.claude'), 'pro')
+process.env.CODEX_HOME = codexDir
+process.env.CLAUDE_CONFIG_DIR = claudeDir
+const cliRoutes = new Map()
+apply({ logger: ctx.logger, get: () => undefined, effect: (fn) => fn(), on: () => () => {},
+  webServer: { register: (route) => { cliRoutes.set(route.path, route.handler); return () => {} } },
+}, { providers: [{ id: 'chatgpt', preset: 'chatgpt' }, { id: 'claude', preset: 'claude' }] })
+let cliCards = providers((await callOn(cliRoutes, ROUTES.refresh, { method: 'POST' })).json)
+check('CODEX_HOME 的登录用于额度查询', cliCards.chatgpt.credential.account === 'custom@example.com' && cliCards.chatgpt.windows?.length > 0, JSON.stringify(cliCards.chatgpt))
+check('CLAUDE_CONFIG_DIR 的登录用于额度查询', cliCards.claude.credential.source === 'cli' && cliCards.claude.plan === 'Max' && cliCards.claude.windows?.length > 0, JSON.stringify(cliCards.claude))
+process.env.CODEX_HOME = path.join(testHome, 'empty-codex')
+process.env.CLAUDE_CONFIG_DIR = path.join(testHome, 'empty-claude')
+cliCards = providers((await callOn(cliRoutes, ROUTES.refresh, { method: 'POST' })).json)
+check('指定目录缺失时不读取默认登录', cliCards.chatgpt.missing === true && cliCards.claude.missing === true)
+delete process.env.CODEX_HOME
+delete process.env.CLAUDE_CONFIG_DIR
+cliCards = providers((await callOn(cliRoutes, ROUTES.refresh, { method: 'POST' })).json)
+check('未设置自定义目录时读取默认文件', cliCards.chatgpt.credential.account === 'default@example.com' && cliCards.claude.plan === 'Pro')
 
 // —— 没有配置就没有卡：不替用户凭空初始化 ——
 const emptyRoutes = new Map()
@@ -600,6 +661,24 @@ let piAiRoutes = editRows[1].options.config.providers
 check('pi-ai 认识的供应商只补一条 apiKeyEnv', piAiRoutes.deepseek?.apiKeyEnv === 'DEEPSEEK_API_KEY', JSON.stringify(piAiRoutes.deepseek))
 check('已有的模型目录没被改写', Array.isArray(piAiRoutes['opencode-go'].models) && piAiRoutes['opencode-go'].models.length === 1)
 check('表单里贴的 key 直接存进凭据库', refs.get('DEEPSEEK_API_KEY') === 'sk-deepseek' && added.json.stored === true)
+
+editHost()
+const addedCommand = await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'commandcode' } })
+check('Command Code 默认 ID 可用于管理', addedCommand.status === 200 && addedCommand.json.id === 'commandcode' && editRows[0].options.config.providers.some((row) => row.id === 'commandcode'), JSON.stringify(addedCommand.json))
+editHost()
+check('Command Code 可用默认 ID 移除', (await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'commandcode' } })).status === 200)
+editRows[0].options.config.providers.push({ preset: 'commandcode' })
+editHost()
+const legacyRemoved = await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'commandcode' } })
+check('旧的缺失 ID 配置也能移除', legacyRemoved.status === 200 && !editRows[0].options.config.providers.some((row) => row.preset === 'commandcode'))
+for (const [preset, provider] of [['chatgpt', 'openai-codex'], ['claude', 'anthropic']]) {
+  editHost()
+  const result = await editCall(ROUTES.providers, { method: 'POST', body: { preset } })
+  check(`${preset} 接入模型目录且不写 API key`, result.status === 200 && result.json.model?.provider === provider && editRows[1].options.config.providers[provider] && !('apiKeyEnv' in editRows[1].options.config.providers[provider]), JSON.stringify(result.json))
+  editHost()
+  await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: result.json.id } })
+  delete editRows[1].options.config.providers[provider]
+}
 
 editHost() // 配置写完，Host 会重载插件；这里也重来一遍
 check('同一个预设不能加第二遍', (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'deepseek-api' } })).status === 409)

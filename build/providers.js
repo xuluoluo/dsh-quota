@@ -111,7 +111,7 @@ export const PRESETS = Object.freeze({
     cliAuth: '.codex/auth.json',
     cliKind: 'codex',
     baseURL: 'https://chatgpt.com/backend-api',
-    model: null,
+    model: { provider: 'openai-codex', kind: 'catalog', oauth: true },
   },
   /**
    * Claude Pro / Max, shared by claude.ai and Claude Code. The usage endpoint
@@ -124,7 +124,7 @@ export const PRESETS = Object.freeze({
     cliAuth: '.claude/.credentials.json',
     cliKind: 'claude',
     baseURL: 'https://api.anthropic.com',
-    model: null,
+    model: { provider: 'anthropic', kind: 'catalog', oauth: true },
   },
 })
 

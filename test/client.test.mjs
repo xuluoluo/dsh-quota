@@ -329,7 +329,9 @@ const ctx = {
 }
 mod.apply(ctx)
 
-check('注册了五个 slot', slots.length === 5 && slots.map((s) => s.spec.name).sort().join() === 'conversation.composer.dock,conversation.input.left,conversation.input.overlay,conversation.input.right,settings.section', JSON.stringify(slots.map((s) => s.spec.name)))
+check('注册了六个 slot', slots.length === 6 && slots.map((s) => s.spec.name).sort().join() === 'conversation.composer.dock,conversation.input.left,conversation.input.overlay,conversation.input.right,settings.section,sidebar.footer.action', JSON.stringify(slots.map((s) => s.spec.name)))
+const sidebarSlot = slots.find((s) => s.spec.name === 'sidebar.footer.action')
+check('侧栏额度注册在公开的底部槽位', sidebarSlot?.spec.id === 'quota-sidebar')
 const chipSlot = slots.find((s) => s.spec.name === 'conversation.input.right')
 const stripSlot = slots.find((s) => s.spec.name === 'conversation.composer.dock')
 const pageSlot = slots.find((s) => s.spec.name === 'settings.section')
@@ -369,6 +371,16 @@ await chip.props.onClick()
 await tick()
 check('点击打了 /quota/refresh 且是 POST',
   calls.some((call) => call.url.endsWith('/quota/refresh') && call.method === 'POST'), JSON.stringify(calls.slice(-3)))
+
+// —— 左侧额度：供应商和所有窗口 ——
+mini.mount(sidebarSlot.component, { wide: true })
+await tick()
+let sidebarTexts = textsOf(mini.tree)
+check('侧栏显示全部供应商', ['OpenCode Go', 'Grok', 'Command Code', 'ChatGPT', 'Claude'].every((name) => sidebarTexts.includes(name)), JSON.stringify(sidebarTexts))
+check('侧栏显示五小时、一周、一个月和各窗口百分比', sidebarTexts.includes('5 小时') && sidebarTexts.includes('一周') && sidebarTexts.includes('一个月') && sidebarTexts.join('').includes('50%') && sidebarTexts.join('').includes('93%'), JSON.stringify(sidebarTexts))
+check('侧栏可以刷新额度', Boolean(findByText(mini.tree, '刷新')))
+mini.mount(sidebarSlot.component, { wide: false })
+check('收起侧栏时只显示紧凑标记', Boolean(byAttr(mini.tree, 'data-dsh-quota', 'sidebar-collapsed')))
 
 // —— 设置页：数字 ——
 mini.mount(pageSlot.component)

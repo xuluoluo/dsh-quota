@@ -38,6 +38,7 @@ window.__ModuleLoader__.load({
     // —— 文案 ——
     var zh = {
       title: '额度',
+      used: '已用',
       chipLabel: '剩余额度',
       chipTitle: '各 provider 的已用额度（点一下刷新）',
       refresh: '刷新',
@@ -65,6 +66,7 @@ window.__ModuleLoader__.load({
       cliTitle: '本机登录',
       cliChatGpt: '使用 Codex 的 ChatGPT 登录',
       cliClaude: '使用 Claude Code 的登录',
+      cliModelHint: '模型使用独立的 DSH 授权：接入模型后，请到设置中的模型供应商完成登录。',
       addCliKind: '本机登录',
       addCliHint: '额度来自本机 CLI 的登录，不用贴 key。',
       keyMissing: '未设置',
@@ -194,6 +196,7 @@ window.__ModuleLoader__.load({
 
     var en = {
       title: 'Quota',
+      used: 'used',
       chipLabel: 'Remaining quota',
       chipTitle: 'Allowance used per provider (click to refresh)',
       refresh: 'Refresh',
@@ -221,6 +224,7 @@ window.__ModuleLoader__.load({
       cliTitle: 'This machine',
       cliChatGpt: 'Using the Codex ChatGPT sign-in',
       cliClaude: 'Using the Claude Code sign-in',
+      cliModelHint: 'Models use separate DSH authorization. After connecting the provider, sign in under model provider settings.',
       addCliKind: 'Local sign-in',
       addCliHint: 'The allowance is read from the CLI login on this machine. No key to paste.',
       keyMissing: 'Not set',
@@ -645,6 +649,44 @@ window.__ModuleLoader__.load({
       }))
     }
 
+    // 侧栏底部使用公开的 list slot，不替换工作区或会话列表。
+    function SidebarQuota(props) {
+      var t = props.t
+      var state = useQuota()
+      var data = state.data
+      if (!data || data.enabled === false || !data.providers.length) return null
+      if (props.wide === false) return h('div', {
+        'data-dsh-quota': 'sidebar-collapsed', title: t('title'),
+        style: { textAlign: 'center', color: C.minor, fontSize: '12px', padding: '6px' },
+      }, '%')
+      return h('section', {
+        'data-dsh-quota': 'sidebar', 'aria-label': t('title'),
+        style: { padding: '8px 12px', minWidth: 0, borderTop: '1px solid ' + C.border },
+      },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } },
+        h('strong', { style: { color: C.minor, fontSize: '12px' } }, t('title') + ' · ' + t('used')),
+        h('button', { type: 'button', onClick: function () { void store.refresh() }, title: t('refresh'),
+          style: { background: 'transparent', border: 0, color: C.minor, cursor: 'pointer', fontSize: '11px' } }, t('refresh'))),
+      state.status === 'error' ? h('div', { style: { color: C.error, fontSize: '11px' }, title: state.error }, state.data ? t('stale') : state.error) : null,
+      h('div', { style: { maxHeight: '30vh', overflowY: 'auto' } }, data.providers.map(function (card) {
+        var windows = orderedWindows(card)
+        return h('div', { key: card.id, style: { padding: '5px 0', borderTop: '1px solid ' + C.border } },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '6px', fontSize: '11px', color: C.text } },
+            h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: card.label }, card.label),
+            card.plan ? h('span', { style: { color: C.minor, whiteSpace: 'nowrap' } }, card.plan) : null),
+          card.error ? h('div', { title: card.error, style: { color: C.error, fontSize: '11px', overflowWrap: 'anywhere' } }, card.error)
+            : windows.length ? windows.map(function (win, index) {
+              var reset = win.resetsAt ? relativeReset(win.resetsAt, t) : ''
+              return h('div', { key: String(win.key) + ':' + index,
+                title: reset ? t('resetsIn') + reset : '',
+                style: { display: 'flex', justifyContent: 'space-between', gap: '6px', fontSize: '11px', color: C.minor, lineHeight: '17px' } },
+                h('span', null, windowLabel(t, win.key)),
+                h('span', { style: { color: colorOf(toneOf(win.used)), whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
+                  typeof win.used === 'number' ? percentOf(win.used) + '%' : t('never'), reset ? ' · ' + reset : ''))
+            }) : h('div', { style: { fontSize: '11px', color: C.minor } }, card.balance || (card.quota === false ? t('noQuota') : t('never'))))
+      })))
+    }
+
     // —— 常驻窄条：挂在输入框下方，不用打开设置 ——
     function QuotaStrip(props) {
       var t = props.t
@@ -949,7 +991,8 @@ window.__ModuleLoader__.load({
             : null,
           credential.configured
             ? h('button', { type: 'button', style: buttonQuiet, disabled: busy, onClick: props.onTest }, busy ? t('testing') : t('testKey'))
-            : null)
+            : null,
+          h('div', { style: { width: '100%', fontSize: '11px', color: C.minor } }, t('cliModelHint')))
       }
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
@@ -2140,6 +2183,18 @@ window.__ModuleLoader__.load({
       var WorkspaceEntry = function (props) {
         return h(WorkspaceChips, Object.assign({}, props, { t: t }))
       }
+      var SidebarEntry = function (props) {
+        return h(SidebarQuota, Object.assign({}, props, { t: t }))
+      }
+
+      ctx.effect(function () {
+        return ctx.slots.inject('sidebar.footer.action', function () {
+          return ctx.slots.register(
+            { name: 'sidebar.footer.action', id: 'quota-sidebar', order: 50 },
+            SidebarEntry,
+          )
+        })
+      })
 
       // composer 左侧：权限预设与 plan 之后，就是这两格。
       ctx.effect(function () {

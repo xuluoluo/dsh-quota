@@ -178,9 +178,12 @@ function log(ctx, level, message, ...args) {
 async function readCliAuth(preset) {
   const relative = typeof preset?.cliAuth === 'string' ? preset.cliAuth : ''
   if (relative === '') return undefined
+  const customDir = preset.cliKind === 'codex' ? process.env.CODEX_HOME : preset.cliKind === 'claude' ? process.env.CLAUDE_CONFIG_DIR : undefined
+  const filename = preset.cliKind === 'codex' ? 'auth.json' : '.credentials.json'
+  const authPath = customDir ? join(customDir, filename) : join(homedir(), relative)
   let parsed
   try {
-    parsed = JSON.parse(await readFile(join(homedir(), relative), 'utf8'))
+    parsed = JSON.parse(await readFile(authPath, 'utf8'))
   } catch {
     return undefined
   }
@@ -205,8 +208,8 @@ function quotaRequest(target, credential) {
   }
 }
 
-async function saveXaiGrant(credentials, grant) {
-  await credentials.modifyRecord(XAI_RECORD, async () => ({
+async function saveXaiGrant(credentials, record, grant) {
+  await credentials.modifyRecord(record ?? XAI_RECORD, async () => ({
     kind: 'grant',
     payload: { type: 'oauth', access: grant.access, refresh: grant.refresh, expires: grant.expires },
   }))
@@ -285,7 +288,7 @@ async function oauthCredential(credentials, target, timeoutMs) {
   credential.expiresAt = typeof usable.grant.expires === 'number' ? new Date(usable.grant.expires).toISOString() : undefined
   if (usable.renewed) {
     try {
-      await saveXaiGrant(credentials, usable.grant)
+      await saveXaiGrant(credentials, target.record, usable.grant)
     } catch (error) {
       log(undefined, 'warn', '[quota] the renewed Grok sign-in was not stored: %s', String(error?.message ?? error))
     }
@@ -376,7 +379,7 @@ function createSignIn(ctx, settings) {
         continue
       }
       if (polled.status === 'done') {
-        await saveXaiGrant(credentials, polled.grant)
+        await saveXaiGrant(credentials, target.record, polled.grant)
         settle(target.id, { status: 'success', account: accountOf(polled.grant.access), error: undefined })
         return
       }
@@ -926,7 +929,7 @@ function registerRoutes(ctx, service, settings, signIn) {
     // The id is the model route's name where there is one, so a card and the
     // model selector agree; an explicit id stays possible for a second gateway.
     const wanted = typeof body.id === 'string' ? body.id.trim() : ''
-    const id = wanted !== '' ? wanted : preset.model?.provider ?? preset.id
+    const id = wanted !== '' ? wanted : preset.model?.provider ?? preset.id ?? body.preset
     if (!ID_PATTERN.test(id)) return jsonError(res, 400, 'the id must start with a letter or digit and hold only letters, digits and dashes')
     if (targets.some((entry) => entry.id === id)) return jsonError(res, 409, `"${id}" is already a provider`)
     const row = { id, preset: body.preset }
@@ -1109,7 +1112,10 @@ function registerRoutes(ctx, service, settings, signIn) {
     if (!target) return jsonError(res, 404, 'unknown-provider')
     try {
       const preset = PRESETS[target.preset]
-      const providers = await editProviders(ctx, (rows) => rows.filter((row) => row.id !== id))
+      const providers = await editProviders(ctx, (rows) => rows.filter((row) => {
+        const rowId = typeof row.id === 'string' && row.id !== '' ? row.id : row.preset
+        return rowId !== id
+      }))
       // A route this plugin wrote goes with the card; a catalog entry stays,
       // because the provider may already have served models before it was
       // added here and removing quota tracking must not break the model list.

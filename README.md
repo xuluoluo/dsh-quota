@@ -41,7 +41,7 @@ Command Code 的 `billing/credits` 不告诉你套餐，而当月额度的分母
 所以第二支接口**并行**只读一次、缓存 10 分钟（magpie 也是这么做的；它有时要 15–20 秒，
 排在后面会把整张卡拖慢）。读不到就退回「只显示余额」。
 
-卡里的窗口**按已用比例从大到小排**：第一行就是最可能挡住你下一次请求的那个限制。
+卡片和左侧额度面板优先显示 5 小时窗口，其余窗口按已用比例排序。窄条优先显示 5 小时；告警仍检查所有窗口。左侧面板可刷新并滚动查看供应商。
 
 DeepSeek 的卡是**余额**，不是窗口：官方只给金额、不给分母，所以它不画进度条，只报
 `余额 · ¥110.00` 和构成（充值 / 赠金），`is_available: false` 时在金额前写明「can not pay」。
@@ -158,8 +158,10 @@ ali:
 | `xai-billing`（Grok） | 补 `xai: {}`，认证走登录记录（写 `apiKeyEnv` 会盖掉登录，所以不写） |
 | `bailian` | 目录里没有：写完整路由（`api` / `baseURL` / `models`） |
 | `commandcode` | 没有可用的聊天接口：只做额度，卡片上标「仅额度」 |
-| `chatgpt` | 只做额度。读 `~/.codex/auth.json` 里的 ChatGPT 登录（`codex login`），不问 API key |
-| `claude` | 只做额度。读 `~/.claude/.credentials.json` 里的 Claude Code 登录，不问 API key |
+| `chatgpt` | 接入 `openai-codex` 目录路由，不写 API key；额度读取 Codex 本机登录 |
+| `claude` | 接入 `anthropic` 目录路由，不写 API key；额度读取 Claude Code 本机登录 |
+
+额度读取和模型认证是两套登录：接入模型后，前往 DSH 的模型供应商设置完成对应 OAuth 登录。插件不会复制 CLI 令牌到模型凭据库。既有路由会保留原配置；如果已有 `apiKeyEnv`，它会优先于 OAuth，可能使用 API 计费。Codex 的目录路由由上游标为 legacy；Claude 订阅是否能在第三方客户端使用取决于供应商当前政策和服务端。`CODEX_HOME` 和 `CLAUDE_CONFIG_DIR` 可指定 CLI 登录目录。
 
 写失败时额度行不会落盘 —— 不会出现「卡片有、模型里没有」的半截状态。与凭据有关的规则
 没变：**`apiKeyEnv` 填的是名字，不是 key**（填成 key 会被 400 拒掉；配置里已经是 key 形状
