@@ -482,202 +482,6 @@ check('没有路由的卡会自己说「未接入模型」',
   orphanState.json.providers[0].inModels === false && orphanState.json.providers[0].modelReason === 'not-mounted',
   JSON.stringify(orphanState.json.providers[0]))
 
-// —— 一家的模型：看 / 获取 / 加 / 删 ——
-const modelRows = [
-  {
-    options: {
-      id: 'llm-pi-ai',
-      name: '@deepseek-ai/dsh-llm-pi-ai',
-      config: {
-        providers: {
-          'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] },
-        },
-      },
-    },
-  },
-  {
-    options: {
-      id: 'dsh-quota',
-      name: 'dsh-allowance',
-      config: { providers: [{ id: 'opencode-go', preset: 'opencode-go' }] },
-    },
-  },
-]
-const modelRoutes = new Map()
-let discoverCall
-const modelEditor = {
-  entries: () => modelRows,
-  async edit(entry, change) {
-    const next = change(structuredClone(entry.options.config ?? {}), {})
-    entry.options.config = next
-    return next
-  },
-}
-const modelLlm = {
-  async listProviders() { return [{ id: 'opencode-go' }] },
-  async listModels() {
-    return [
-      { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000 },
-      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' },
-    ]
-  },
-  async discoverModels(settingsNs, request) {
-    discoverCall = { settingsNs, request }
-    return [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }, { id: 'new-model', name: 'New Model' }]
-  },
-}
-apply({
-  logger: ctx.logger,
-  get: (name) => {
-    if (name === 'llm') return modelLlm
-    if (name === 'configEditor') return modelEditor
-    if (name === 'credentials') return credentials
-    return undefined
-  },
-  effect: (fn) => fn(),
-  on: () => () => {},
-  webServer: { register: (route) => { modelRoutes.set(route.path, route.handler); return () => {} } },
-}, modelRows[1].options.config)
-const modelCall = (route, options) => callOn(modelRoutes, route, options)
-
-const listed = await modelCall(ROUTES.providerModels, { url: `${ROUTES.providerModels}?id=opencode-go` })
-check('GET /quota/provider/models 列出这家的模型',
-  listed.status === 200 && listed.json.models.length === 2 && listed.json.models[0].id === 'deepseek-v4.1-flash',
-  JSON.stringify(listed.json))
-
-const discovery = await modelCall(ROUTES.providerModelsDiscover, { method: 'POST', body: { id: 'opencode-go' } })
-check('获取模型走 llm.discoverModels',
-  discovery.status === 200 && discovery.json.models.length === 2 && discoverCall?.settingsNs === 'llm-pi-ai' && discoverCall.request.provider === 'opencode-go',
-  JSON.stringify({ discovery: discovery.json, discoverCall }))
-
-const addedModel = await modelCall(ROUTES.providerModelsAdd, {
-  method: 'POST',
-  body: { id: 'opencode-go', model: { id: 'new-model', name: 'New Model', contextWindow: 123456, maxTokens: 4096, input: ['text', 'image'] } },
-})
-let modelConfig = modelRows[0].options.config.providers['opencode-go'].models
-check('添加模型写进 llm-pi-ai.providers[].models',
-  addedModel.status === 200 && modelConfig.length === 2 && modelConfig[1].id === 'new-model',
-  JSON.stringify({ added: addedModel.json, modelConfig }))
-check('添加模型保留上下文窗口 / 输出上限 / 模态',
-  modelConfig[1].contextWindow === 123456 && modelConfig[1].maxTokens === 4096 && modelConfig[1].input.join() === 'text,image',
-  JSON.stringify(modelConfig[1]))
-check('重复模型回 409', (await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { id: 'new-model' } } })).status === 409)
-check('没给 id 回 400', (await modelCall(ROUTES.providerModelsAdd, { method: 'POST', body: { id: 'opencode-go', model: { name: 'x' } } })).status === 400)
-
-const removedModel = await modelCall(ROUTES.providerModelsRemove, { method: 'POST', body: { id: 'opencode-go', modelId: 'deepseek-v4.1-flash' } })
-modelConfig = modelRows[0].options.config.providers['opencode-go'].models
-check('删除模型只留下其它条目',
-  removedModel.status === 200 && modelConfig.length === 1 && modelConfig[0].id === 'new-model',
-  JSON.stringify({ removed: removedModel.json, modelConfig }))
-check('删除不存在的模型回 404',
-  (await modelCall(ROUTES.providerModelsRemove, { method: 'POST', body: { id: 'opencode-go', modelId: 'nope' } })).status === 404)
-check('不能把最后一条删掉',
-  (await modelCall(ROUTES.providerModelsRemove, { method: 'POST', body: { id: 'opencode-go', modelId: 'new-model' } })).status === 400)
-
-// —— 跟随目录：手写的 models 删掉，路由重新跟 pi-ai 目录 ——
-// 这是「很多大模型都缺少了」的那一半：只要 profile 里留着手写清单，路由就
-// 不再长；删掉它，模型数是目录里有多少就是多少。
-const followRows = [
-  {
-    options: {
-      id: 'llm-pi-ai',
-      name: '@deepseek-ai/dsh-llm-pi-ai',
-      config: {
-        providers: {
-          'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'only-one', name: 'Only One' }] },
-        },
-      },
-    },
-  },
-  {
-    options: {
-      id: 'dsh-quota',
-      name: 'dsh-allowance',
-      config: { providers: [{ id: 'opencode-go', preset: 'opencode-go' }] },
-    },
-  },
-]
-const followRoutes = new Map()
-const followEditor = {
-  entries: () => followRows,
-  async edit(entry, change) {
-    const next = change(structuredClone(entry.options.config ?? {}), {})
-    entry.options.config = next
-    return next
-  },
-}
-const catalog = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
-apply({
-  logger: ctx.logger,
-  get: (name) => {
-    if (name === 'llm') return { listProviders: async () => [{ id: 'opencode-go' }], listModels: async () => catalog }
-    if (name === 'configEditor') return followEditor
-    if (name === 'credentials') return credentials
-    return undefined
-  },
-  effect: (fn) => fn(),
-  on: () => () => {},
-  webServer: { register: (route) => { followRoutes.set(route.path, route.handler); return () => {} } },
-}, followRows[1].options.config)
-
-const typed = await callOn(followRoutes, ROUTES.providerModels, { url: `${ROUTES.providerModels}?id=opencode-go` })
-check('手写清单在时 GET 说自己在跟随：false', typed.json.following === false, JSON.stringify(typed.json))
-
-const followed = await callOn(followRoutes, ROUTES.providerModelsFollow, { method: 'POST', body: { id: 'opencode-go' } })
-check('跟随目录删掉手写 models 并回到目录清单',
-  followed.status === 200 && followed.json.models.length === 3 &&
-    followRows[0].options.config.providers['opencode-go'].models === undefined &&
-    followRows[0].options.config.providers['opencode-go'].apiKeyEnv === 'OPENCODE_GO_API_KEY',
-  JSON.stringify({ followed: followed.json, config: followRows[0].options.config }))
-
-// —— 把 CLI 登录也写给模型路由 ——
-// 不写这条记录，router 每次请求都答 "Provider is not configured"。
-const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-codex-'))
-fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({
-  tokens: {
-    access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
-    refresh_token: 'refresh-codex',
-    account_id: 'acct-codex',
-  },
-}))
-const previousCodexHome = process.env.CODEX_HOME
-process.env.CODEX_HOME = codexHome
-
-const authRows = [
-  { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'openai-codex': {} } } } },
-  { options: { id: 'dsh-quota', name: 'dsh-allowance', config: { providers: [{ id: 'chatgpt', preset: 'chatgpt' }] } } },
-]
-const authRoutes = new Map()
-apply({
-  logger: ctx.logger,
-  get: (name) => {
-    if (name === 'llm') return { listProviders: async () => [{ id: 'openai-codex' }], listModels: async () => [] }
-    if (name === 'credentials') return credentials
-    return undefined
-  },
-  effect: (fn) => fn(),
-  on: () => () => {},
-  webServer: { register: (route) => { authRoutes.set(route.path, route.handler); return () => {} } },
-}, authRows[1].options.config)
-
-const synced = await callOn(authRoutes, ROUTES.providerModelAuth, { method: 'POST', body: { id: 'chatgpt' } })
-const stored = records.get('llm-pi-ai/openai-codex')
-check('同步登录把 CLI 的订阅写成模型路由的 grant',
-  synced.status === 200 && synced.json.status === 'written' &&
-    stored?.kind === 'grant' && stored.payload.type === 'oauth' &&
-    stored.payload.access === jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }) &&
-    stored.payload.refresh === 'refresh-codex' && stored.payload.accountId === 'acct-codex',
-  JSON.stringify({ synced: synced.json, stored: stored === undefined ? null : { kind: stored.kind, payload: Object.keys(stored.payload ?? {}) } }))
-
-const again = await callOn(authRoutes, ROUTES.providerModelAuth, { method: 'POST', body: { id: 'chatgpt' } })
-check('还有效的 grant 不被覆盖', again.json.status === 'present' && records.get('llm-pi-ai/openai-codex') === stored)
-
-records.delete('llm-pi-ai/openai-codex')
-fs.rmSync(codexHome, { recursive: true, force: true })
-if (previousCodexHome === undefined) delete process.env.CODEX_HOME
-else process.env.CODEX_HOME = previousCodexHome
-
-
 // —— 没有凭据服务：说清楚，而不是崩 ——
 const bareRoutes = new Map()
 apply({
@@ -716,8 +520,9 @@ if (fs.existsSync(cliAuth)) {
   console.log('SKIP  Command Code CLI 登录：这台机器没有 ~/.commandcode/auth.json')
 }
 
-// —— 添加 / 移除供应商：写进 profile 自己的 patch 层 ——
-// 这一组用自己的一份配置与路由，免得把上面那套读取用例的卡片弄乱。
+// —— 添加 / 移除供应商：只写额度行，不碰模型路由 ——
+// 这一组用自己的一份配置与路由，免得把上面那套读取用例的卡片弄乱；
+// llm-pi-ai 那一行在这里只用来证明「一个字节都没被写过」。
 const editRows = [
   {
     options: {
@@ -756,14 +561,16 @@ function editHost() {
 editHost()
 const editCall = (route, options) => callOn(editRoutes, route, options)
 
+const piAiBefore = JSON.stringify(editRows[1].options.config)
 const added = await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'deepseek-api', key: 'sk-deepseek' } })
 check('POST /quota/providers 回 200', added.status === 200, JSON.stringify(added.json))
-check('id 默认取模型路由名', added.json.id === 'deepseek', JSON.stringify(added.json))
+check('id 默认取预设的模型名', added.json.id === 'deepseek', JSON.stringify(added.json))
 let savedRows = editRows[0].options.config.providers
 check('新 provider 落在配置里，且没有顺手补默认值', savedRows.length === 2 && savedRows[1].id === 'deepseek' && savedRows[1].preset === 'deepseek-api', JSON.stringify(savedRows))
-let piAiRoutes = editRows[1].options.config.providers
-check('pi-ai 认识的供应商只补一条 apiKeyEnv', piAiRoutes.deepseek?.apiKeyEnv === 'DEEPSEEK_API_KEY', JSON.stringify(piAiRoutes.deepseek))
-check('已有的模型目录没被改写', Array.isArray(piAiRoutes['opencode-go'].models) && piAiRoutes['opencode-go'].models.length === 1)
+check('响应只回额度行，不带 model 字段',
+  Array.isArray(added.json.providers) && added.json.providers.length === 2 && !('model' in added.json),
+  JSON.stringify(added.json).slice(0, 200))
+check('llm-pi-ai 的配置没被改写', JSON.stringify(editRows[1].options.config) === piAiBefore)
 check('表单里贴的 key 直接存进凭据库', refs.get('DEEPSEEK_API_KEY') === 'sk-deepseek' && added.json.stored === true)
 
 editHost()
@@ -775,57 +582,58 @@ editRows[0].options.config.providers.push({ preset: 'commandcode' })
 editHost()
 const legacyRemoved = await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'commandcode' } })
 check('旧的缺失 ID 配置也能移除', legacyRemoved.status === 200 && !editRows[0].options.config.providers.some((row) => row.preset === 'commandcode'))
-for (const [preset, provider] of [['chatgpt', 'openai-codex'], ['claude', 'anthropic']]) {
+// 登录型 / CLI 型预设：卡照加，模型路由一个字都不写。
+for (const preset of ['chatgpt', 'claude']) {
   editHost()
   const result = await editCall(ROUTES.providers, { method: 'POST', body: { preset } })
-  check(`${preset} 接入模型目录且不写 API key`, result.status === 200 && result.json.model?.provider === provider && editRows[1].options.config.providers[provider] && !('apiKeyEnv' in editRows[1].options.config.providers[provider]), JSON.stringify(result.json))
+  check(`${preset} 只写额度行、不碰模型路由`,
+    result.status === 200 && !('model' in result.json) &&
+      editRows[0].options.config.providers.some((row) => row.id === result.json.id) &&
+      JSON.stringify(editRows[1].options.config) === piAiBefore,
+    JSON.stringify(result.json).slice(0, 200))
   editHost()
   await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: result.json.id } })
-  delete editRows[1].options.config.providers[provider]
 }
 
 editHost() // 配置写完，Host 会重载插件；这里也重来一遍
 check('同一个预设不能加第二遍', (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'deepseek-api' } })).status === 409)
-
-// 卡片在、模型路由被手工删了：一键接回去
-delete editRows[1].options.config.providers.deepseek
-const attached = await editCall(ROUTES.providersAttach, { method: 'POST', body: { id: 'deepseek' } })
-check('未接入的卡能一键接回模型路由',
-  attached.status === 200 && editRows[1].options.config.providers.deepseek?.apiKeyEnv === 'DEEPSEEK_API_KEY',
-  JSON.stringify(attached.json))
 check('未知 preset 回 400', (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'nope' } })).status === 400)
 check('非法 id 回 400', (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'bailian', id: 'bad id!' } })).status === 400)
 
-// 换一家 pi-ai 目录里没有的：顺带把模型路由写上
+// 换一家 pi-ai 目录里没有的：额度行照写，模型路由不归这张卡管
 editHost()
 const addedBailian = await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'bailian', label: '阿里云测试' } })
-check('加百炼回 200 并带回写入的路由',
-  addedBailian.status === 200 && addedBailian.json.model?.entry?.api === 'openai-completions',
+check('加百炼回 200 且响应里没有 model',
+  addedBailian.status === 200 && !('model' in addedBailian.json),
   JSON.stringify(addedBailian.json).slice(0, 200))
-piAiRoutes = editRows[1].options.config.providers
-check('模型路由写进了 llm-pi-ai.providers', Boolean(piAiRoutes.bailian) && piAiRoutes.bailian.apiKeyEnv === 'DASHSCOPE_API_KEY')
-check('路由带 baseURL 与两个模型', piAiRoutes.bailian.baseURL.includes('dashscope') && piAiRoutes.bailian.models.length === 2)
-check('路由带显示名', piAiRoutes.bailian.displayName === '阿里云测试')
-check('原有路由没被弄丢', Boolean(piAiRoutes['opencode-go']))
+savedRows = editRows[0].options.config.providers
+check('百炼只落额度行（带显示名）',
+  savedRows.some((row) => row.id === 'bailian' && row.label === '阿里云测试' && row.preset === 'bailian'),
+  JSON.stringify(savedRows))
+check('llm-pi-ai 里没有多出百炼路由',
+  !('bailian' in editRows[1].options.config.providers) && JSON.stringify(editRows[1].options.config) === piAiBefore,
+  JSON.stringify(editRows[1].options.config))
 check('凭据引用填成 key 会被拒（400）',
   (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'xai-billing', apiKeyEnv: 'sk-ws-abc.def.ghi' } })).status === 400)
 check('登录型供应商不收 key',
   (await editCall(ROUTES.providers, { method: 'POST', body: { preset: 'xai-billing', key: 'sk-1' } })).status === 400)
 
-// —— 移除：卡片走，模型路由留下的部分按种类处理 ——
+// —— 移除：只删额度行，模型路由不是这张卡管的 ——
 editHost()
 const removed = await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'deepseek' } })
 check('POST /quota/providers/remove 回 200', removed.status === 200, JSON.stringify(removed.json))
 savedRows = editRows[0].options.config.providers
-check('移除后配置里没有它了', !savedRows.some((row) => row.id === 'deepseek'), JSON.stringify(savedRows))
-check('pi-ai 目录里的路由不会被删掉', Boolean(editRows[1].options.config.providers.deepseek))
+check('移除后额度配置里没有它了', !savedRows.some((row) => row.id === 'deepseek'), JSON.stringify(savedRows))
+check('移除响应只回额度行列表，不带 model', Array.isArray(removed.json.providers) && !('model' in removed.json), JSON.stringify(removed.json).slice(0, 160))
+check('移除不回写 llm-pi-ai：配置原样不动', JSON.stringify(editRows[1].options.config) === piAiBefore, JSON.stringify(editRows[1].options.config))
 check('移除不存在的 provider 回 404', (await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'nope' } })).status === 404)
 
 editHost()
 const removedBailian = await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'bailian' } })
-check('移除插件写过的路由也会带走它',
-  removedBailian.status === 200 && !editRows[1].options.config.providers.bailian,
-  JSON.stringify(editRows[1].options.config.providers))
+check('移除百炼也只删额度行', removedBailian.status === 200 &&
+  !editRows[0].options.config.providers.some((row) => row.id === 'bailian') &&
+  JSON.stringify(editRows[1].options.config) === piAiBefore,
+  JSON.stringify({ rows: editRows[0].options.config.providers, llm: editRows[1].options.config }).slice(0, 240))
 check('剩最后一家也能移除',
   (await editCall(ROUTES.providersRemove, { method: 'POST', body: { id: 'opencode-go' } })).status === 200)
 

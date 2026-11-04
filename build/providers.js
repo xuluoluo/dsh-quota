@@ -111,7 +111,14 @@ export const PRESETS = Object.freeze({
     cliAuth: '.codex/auth.json',
     cliKind: 'codex',
     baseURL: 'https://chatgpt.com/backend-api',
-    model: { provider: 'openai-codex', kind: 'catalog', oauth: true },
+    /**
+     * Read only, for the card's `已接入模型` badge: `openai` is the route DSH's
+     * own "Sign in with ChatGPT" flow serves, and a profile still on the legacy
+     * `openai-codex` entry is recognized as reachable too. This plugin never
+     * writes that route — the badge just says whether the model selector can
+     * see the provider today.
+     */
+    model: { provider: 'openai', kind: 'catalog', oauth: true },
   },
   /**
    * Claude Pro / Max, shared by claude.ai and Claude Code. The usage endpoint

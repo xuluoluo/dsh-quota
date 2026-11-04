@@ -18,9 +18,10 @@ DSH 的模型选择器只告诉你「用哪个模型」，不告诉你「这个 
    完整路径，分支那格是仓库根 + 分支名；15 秒问一次 Host，会话一换就重新问；
 3. **设置 → 额度**（`settings.section` 里的 `quota` 页）—— 页内分三栏：**额度**（每个 provider 的卡片：窗口进度条最紧的排最前 + 重置倒计时 + 凭据区，含保存 / 清除 / 测试）、**用量**（四宫格 + 七天条带 + 模型明细，带估算花费）、**输入预测**（开关 / 模型 / 提示词）；
 4. 列表上方的 **+ 添加供应商** —— 选一家厂商、贴 key（Grok 是加完再登录），写进 profile 的
-   `cordis.patch.yml`，重启还在；**模型路由会一起写好**，所以加完就能在模型选择器里选到它；
-5. 卡片头上会写清这家有没有接进模型：`已接入模型` / `未接入模型` / `仅额度`（Command Code
-   没有可用的聊天接口，只在这里盯额度）。
+   `cordis.patch.yml`，重启还在；**只写额度行与凭据，不动模型路由**；
+5. 卡片头上会写清这家在 `llm-pi-ai` 里有没有对应路由：`已接入模型` / `未接入模型` / `仅额度`
+   （Command Code 没有可用的聊天接口，只在这里盯额度）。这只读不写 —— 卡片上没有「接入模型」
+   按钮，模型清单与路由请到 DSH 的 Models 页维护。
 
 **没有默认供应商**：没配置就是空页，只有一句「还没有供应商」和添加入口 —— 凭空出现的卡片
 会让人以为模型选择器里也有它们。
@@ -121,26 +122,16 @@ Command Code 没存 key 时自动读它 CLI 的登录 `~/.commandcode/auth.json`
 ### 阿里云百炼：只有 key
 
 百炼的 DashScope key 是 OpenAI 兼容的（`https://dashscope.aliyuncs.com/compatible-mode/v1`），
-但这版 pi-ai 的 provider 目录里没有百炼。所以除了把 key 存成 `DASHSCOPE_API_KEY`，添加这个
-供应商时还会往 `llm-pi-ai.providers` 写一条路由：
-
-`yaml
-ali:
-  displayName: 阿里云百炼
-  apiKeyEnv: DASHSCOPE_API_KEY
-  api: openai-completions
-  baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
-  models: [qwen3.8-max, qwen3.8-flash]
-`
-
-模型 id 是从 `GET /compatible-mode/v1/models` 的实际返回里挑的（那份列表有 178 个）。
-之后调用产生的 token 照样进上面的用量统计。
+但这一版插件**只把 key 存成 `DASHSCOPE_API_KEY`**，不再替你往 `llm-pi-ai.providers` 写路由 ——
+想在这个网关上调模型，去 DSH 的 Models 页自己加（`api: openai-completions` + 上面那个
+`baseURL`）；配好之后，调用产生的 token 照样进上面的用量统计。
 
 ## 四、添加 / 移除供应商
 
 列表上方一个「+ 添加供应商」按钮。点开只有三样：**厂商**、可选的显示名、可选的 API key
 （Grok 是加完在卡片里点登录）。不再问 `id` / 网关地址 / 凭据引用 —— 那些是给第二套网关
-准备的，收在「高级」里。添加成功后自动收起，`id` 由 Host 从预设推出（就是模型路由的名字）。
+准备的，收在「高级」里。添加成功后自动收起，`id` 由 Host 从预设推出（`deepseek`、`openai`、
+`opencode-go` 这类名字，沿用旧配置里的拼法）。
 
 写的是 **profile 自己的 patch 层**（`cordis.patch.yml` 里 id 为 `dsh-quota` 的那一行），
 不是插件内部的状态文件 —— 所以重启、升级都还在，也能被别的工具读到。**没有内置供应商**：
@@ -150,55 +141,26 @@ ali:
 `deepseek-api`（只有余额）、`bailian`（只存 key）、`chatgpt`（ChatGPT 订阅，读 Codex 登录）、
 `claude`（Claude 订阅，读 Claude Code 登录）。已经加过的厂商不再出现在下拉里。
 
-**添加时同时接模型**，这就是它和以前不一样的地方：
+**添加供应商只写额度**：插件不写 `llm-pi-ai.providers`，不改模型清单，也不写
+`llm-pi-ai/<provider>` 凭据记录。加一家厂商 = 加一张卡 + 保存 key（或读它 CLI 的登录），
+仅此而已。
 
-| 预设 | 模型侧 |
+| 预设 | 额度侧 |
 |---|---|
-| `opencode-go` / `deepseek-api` | pi-ai 目录认识它们：只往 `llm-pi-ai.providers` 补一条 `apiKeyEnv`，模型目录原样保留 |
-| `xai-billing`（Grok） | 补 `xai: {}`，认证走登录记录（写 `apiKeyEnv` 会盖掉登录，所以不写） |
-| `bailian` | 目录里没有：写完整路由（`api` / `baseURL` / `models`） |
+| `opencode-go` / `deepseek-api` | 存 `apiKeyEnv` 指向的 key，读厂商的余额 / 用量接口 |
+| `xai-billing`（Grok） | 设备码登录写 `llm-pi-ai/xai` 记录（这是 `dsh-llm-pi-ai` 自己的登录缝），读订阅窗口 |
+| `bailian` | 没有公开余额接口：只存 key |
 | `commandcode` | 没有可用的聊天接口：只做额度，卡片上标「仅额度」 |
-| `chatgpt` | 接入 `openai-codex` 目录路由，不写 API key；额度读取 Codex 本机登录，并把同一份登录同步成模型凭据 |
-| `claude` | 接入 `anthropic` 目录路由，不写 API key；额度读取 Claude Code 本机登录，同样同步凭据 |
+| `chatgpt` | 额度读 Codex 本机登录；不写 API key，也不改模型路由 |
+| `claude` | 额度读 Claude Code 本机登录；不写 API key，也不改模型路由 |
 
-**订阅登录会写两处**：额度读的是 CLI 自己的文件，模型路由读的是凭据库里的
-`llm-pi-ai/<provider>` 记录。只读 CLI 不写记录，模型选择器里能看见路由却每次请求都答
-`Provider is not configured` —— 所以插件在刷新快照时会把 CLI 的 access / refresh /
-（Codex 需要的）accountId 写进那条记录，卡片上写「模型路由已可用」；没写成功时卡片直接
-红字提示，并给一个「同步登录」按钮重试。已经有效、未过期的记录不会被覆盖（那可能是你在
-Models 页自己登录的，refresh token 更完整）。既有路由保留原配置；如果已有 `apiKeyEnv`，
-它会优先于 OAuth，可能使用 API 计费。Codex 的目录路由由上游标为 legacy；Claude 订阅是否
-能在第三方客户端使用取决于供应商当前政策和服务端。`CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`
-可指定 CLI 登录目录。
+卡片头读一次 `llm-pi-ai` 的配置来判断这家有没有挂上路由，**只用于显示**：写着「未接入模型」
+就表示模型选择器里暂时选不到它，去 Models 页接；插件不会替你补。Grok 的登录是唯一会写凭据
+记录的地方（`llm-pi-ai/xai`，与 DSH 自己写的那条同形），因为它同时是额度与模型两条路的登录。
 
-**模型清单只有一个来源**：profile 里给目录路由手写 `models:` 会让那条路由从此不再跟着
-pi-ai 目录长（目录里 30 个，选择器里只剩你抄过的 2 个）。插件写路由时不写 `models`，
-「获取模型」对目录路由直接回目录；卡片里那条路由如果还留着旧的手写清单，头部会出现
-「跟随目录」，点一下删掉它、模型数立刻回到目录值。
-
-写失败时额度行不会落盘 —— 不会出现「卡片有、模型里没有」的半截状态。与凭据有关的规则
-没变：**`apiKeyEnv` 填的是名字，不是 key**（填成 key 会被 400 拒掉；配置里已经是 key 形状
-的，读的时候会被丢掉、退回预设的引用）。移除时：插件自己写的路由会一起删，pi-ai 目录里
-本来就有的路由保留 —— 那可能早就在给模型用了。
-
-卡片头会写明 `已接入模型` / `未接入模型` / `仅额度`；写着「未接入模型」的那张卡旁边有
-「接入模型」，点一下只补模型路由，不会把卡片加成第二张 —— 老配置（比如百炼那条路由还叫
-`ali`）也能接上：插件按 `baseURL` 认得出同一个网关。
-
-### 卡片里的模型清单
-
-每张已接入模型的卡里有一条可展开的「▸ 模型」：
-
-| 动作 | 做什么 |
-|---|---|
-| 展开 | 列出这条路由当前提供的模型（`llm.listModels(provider)`） |
-| **获取模型** | 调 `llm.discoverModels('llm-pi-ai', { provider, baseURL?, api? })`：pi-ai 目录认识的按目录回答（不发请求）；百炼这种手工路由才拿存着的 key 去问 `GET {baseURL}/models`。结果以候选行出现，点「加入」才写进去 |
-| **添加模型** | 手填 `id` + 可选显示名，追加到 `llm-pi-ai.providers[provider].models` |
-| **删除** | 从同一份 `models` 里去掉；最后一条不让删（pi-ai 会拒绝解析不出模型的路由） |
-
-写的是模型路由自己的 `models` 列表，所以**模型选择器下一次请求就能看到**。代价要记住：
-目录路由一旦被写上了 `models`，就**固定成这份清单**、不再跟随 pi-ai 目录（页面上有一行小字
-写着）；删掉的模型可以再加回来。
+与凭据有关的规则没变：**`apiKeyEnv` 填的是名字，不是 key**（填成 key 会被 400 拒掉；配置里
+已经是 key 形状的，读的时候会被丢掉、退回预设的引用）。移除一张卡只删这张卡的额度行，模型
+路由与凭据记录都保留 —— 那可能早就在给模型用了。
 
 ## 五、输入预测（输入框里的灰字）
 
@@ -258,7 +220,7 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
       - id: deepseek
         preset: deepseek-api
         apiKeyEnv: DEEPSEEK_API_KEY
-      - id: bailian               # 目录里没有 → 需要 llm-pi-ai.providers 里那条路由
+      - id: bailian               # 只存 key；模型路由去 Models 页自己加
         preset: bailian
         apiKeyEnv: DASHSCOPE_API_KEY
       - id: my-oc                # 换网关：baseURL 替换预设的默认根路径
@@ -295,13 +257,8 @@ plugin_manager install_bundle  target = D:\Documents\deepseek-harness\default-wo
 | POST | `/quota/suggest` | `{sessionId}` → `{suggestion, reason}`；关掉时 `reason: disabled`，不碰模型 |
 | GET | `/quota/models` | 预测的模型下拉：`{groups: [{provider, name, models}]}` |
 | POST | `/quota/predict` | `{enabled?, provider?, model?, systemPrompt?, maxTokens?, debounceMs?}` → 写进 patch |
-| POST | `/quota/providers` | `{preset, label?, key?, baseURL?, apiKeyEnv?, id?}` → 写额度行 + 接模型路由 + 存 key |
-| POST | `/quota/providers/attach` | `{id}` → 只补这家缺的模型路由（卡片上的「接入模型」） |
-| GET | `/quota/provider/models?id=` | 这家的模型清单：`{provider, models: [{id, name, contextWindow?, maxTokens?}]}` |
-| POST | `/quota/provider/models/discover` | `{id}` → 问厂商要模型（catalog 直接答）：`{ok, models}` |
-| POST | `/quota/provider/models/add` | `{id, model: {id, name?}}` → 追加到 `llm-pi-ai.providers[].models` |
-| POST | `/quota/provider/models/remove` | `{id, modelId}` → 从那份 `models` 里去掉（至少留一条） |
-| POST | `/quota/providers/remove` | `{id}` → 从 patch 移除；插件自己写的模型路由顺带删掉，pi-ai 目录里的路由保留 |
+| POST | `/quota/providers` | `{preset, label?, key?, baseURL?, apiKeyEnv?, id?}` → 只写额度行 + 存 key（不碰模型路由） |
+| POST | `/quota/providers/remove` | `{id}` → 只从 patch 移除这张额度卡；模型路由与凭据记录都保留 |
 | POST | `/quota/login/start` | 领设备码，返回 `userCode` / 授权链接 |
 | GET | `/quota/login/status?id=` | `pending` / `success` / `failed` / `cancelled` |
 | POST | `/quota/login/cancel` | 取消一次登录 |
@@ -325,8 +282,8 @@ cd plugins\dsh-quota
 
 node test\providers.test.mjs                  # 四个 reader 的纯逻辑（38 项）
 $env:QUOTA_LIVE='1'; node test\providers.test.mjs   # 再打一次真接口（本机凭据）
-node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、模型清单、工作区、用量、同源（108 项）
-node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、工作区、模型清单、预测灰字、存 key、登录、加供应商（98 项）
+node test\host.test.mjs                       # Host：路由、凭据、续期、登录、供应商、工作区、用量、同源
+node test\client.test.mjs                     # Client：注册、取数、渲染、用量、成本、告警、窄条、工作区、预测灰字、存 key、登录、加供应商
 node test\prediction.test.mjs                 # 预测：摘录、清洗、空闲判断、模型选择（22 项）
 node test\workspace.test.mjs                  # 工作区：文件夹名、分支、游离 HEAD、探针缓存（10 项）
 

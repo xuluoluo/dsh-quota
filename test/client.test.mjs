@@ -147,7 +147,6 @@ const cardBase = {
   auth: 'key',
   modelProvider: 'opencode-go',
   inModels: true,
-  modelAuth: { ready: true, status: 'written' },
   keysUrl: 'https://opencode.ai/auth',
   windows: [
     { key: 'rolling', used: 2, resetsAt: '2026-10-20T06:45:48.000Z' },
@@ -271,18 +270,6 @@ let answer = (url, init) => {
   if (url.endsWith('/quota/test')) return { ok: true, detail: '178 models' }
   if (url.endsWith('/quota/suggest')) return { suggestion: '继续把测试补上' }
   if (url.endsWith('/quota/models')) return { groups: [{ provider: 'opencode-go', name: 'OpenCode Go', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] }] }
-  if (url.endsWith('/quota/provider/models/discover')) {
-    return { ok: true, models: [{ id: 'new-model', name: 'New Model' }, { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] }
-  }
-  if (url.endsWith('/quota/provider/models/add')) {
-    return { ok: true, models: [{ id: 'deepseek-v4.1-flash' }, { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }, { id: 'new-model', name: 'New Model' }] }
-  }
-  if (url.endsWith('/quota/provider/models/remove')) {
-    return { ok: true, models: [{ id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }] }
-  }
-  if (url.includes('/quota/provider/models?')) {
-    return { ok: true, provider: 'opencode-go', following: false, models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }, { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }] }
-  }
   if (url.endsWith('/quota/providers')) return { ok: true }
   if (url.endsWith('/quota/providers/remove')) return { ok: true }
   if (url.includes('/quota/workspace')) {
@@ -499,63 +486,12 @@ check('用量区给出估算花费', pageTexts.join('').includes('≈') && pageT
 check('模型行也带花费', pageTexts.join('').includes('.013'))
 pageTexts = await openTab('额度')
 check('超过阈值时卡头挂告警', pageTexts.join('').includes('已达上限') && pageTexts.join('').includes('接近上限'))
-check('卡头写清模型接没接上', pageTexts.join('').includes('已接入模型') && pageTexts.join('').includes('仅额度'))
-const attachButton = findByText(mini.tree, '接入模型')
-check('未接入模型的卡有「接入模型」按钮', Boolean(attachButton))
-await attachButton.props.onClick()
-await tick(60)
-check('接入打了 /quota/providers/attach',
-  calls.some((call) => call.url.endsWith('/quota/providers/attach') && JSON.parse(call.body).id === 'deepseek'),
-  JSON.stringify(calls.map((call) => call.url).slice(-4)))
-check('接入成功后说了结果', textsOf(mini.tree).join('').includes('已接入模型选择器'))
-
-// —— 卡片里的模型清单：看 / 获取 / 加 / 删 ——
-const modelSection = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
-check('卡片里有模型清单且默认收起',
-  Boolean(modelSection) && !textsOf(modelSection).join('').includes('DeepSeek V4.1 Flash'),
-  JSON.stringify(textsOf(modelSection || {})))
-const modelsToggle = elements(modelSection).find((node) => node.type === 'button' && textsOf(node).join('').includes('模型'))
-await modelsToggle.props.onClick()
-await tick(60)
-let section = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
-check('展开后列出这家的模型',
-  textsOf(section).join('').includes('DeepSeek V4.1 Flash') && textsOf(section).join('').includes('GLM-5.3 Flash'),
-  JSON.stringify(textsOf(section)))
-check('取模型打了 GET', calls.some((call) => call.url.includes('/quota/provider/models?id=opencode-go')))
-
-const fetchButton = elements(section).find((node) => node.type === 'button' && textsOf(node).join('').includes('获取模型'))
-await fetchButton.props.onClick()
-await tick(60)
-section = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
-check('获取模型打了 discover',
-  calls.some((call) => call.url.endsWith('/quota/provider/models/discover') && JSON.parse(call.body).id === 'opencode-go'))
-check('候选里出现目录外的模型', textsOf(section).join('').includes('New Model'))
-
-const joinButton = elements(section).find((node) => node.type === 'button' && textsOf(node).join('') === '加入')
-check('候选后面有「加入」', Boolean(joinButton))
-await joinButton.props.onClick()
-await tick(80)
-check('加入打的是 add',
-  calls.some((call) => call.url.endsWith('/quota/provider/models/add') && JSON.parse(call.body).model.id === 'new-model'),
-  JSON.stringify(calls.slice(-3)))
-section = byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go')
-const removeButton = elements(section).find((node) => node.type === 'button' && textsOf(node).join('') === '删除')
-check('每个模型后面有「删除」', Boolean(removeButton))
-await removeButton.props.onClick()
-await tick(80)
-check('删除打的是 remove',
-  calls.some((call) => call.url.endsWith('/quota/provider/models/remove') && JSON.parse(call.body).modelId === 'deepseek-v4.1-flash'),
-  JSON.stringify(calls.slice(-3)))
-
-check('卡片说清模型路由能不能用', textsOf(section).join('').includes('模型路由已可用'), JSON.stringify(textsOf(section)))
-
-const followButton = findByText(section, '跟随目录')
-check('手写清单的路由给「跟随目录」', Boolean(followButton))
-await followButton.props.onClick()
-await tick(80)
-check('跟随目录打的是 follow',
-  calls.some((call) => call.url.endsWith('/quota/provider/models/follow') && JSON.parse(call.body).id === 'opencode-go'),
-  JSON.stringify(calls.slice(-3)))
+check('卡头写清模型接没接上', pageTexts.join('').includes('已接入模型') && pageTexts.join('').includes('未接入模型') && pageTexts.join('').includes('仅额度'))
+check('卡片只读，没有「接入模型」按钮', !findByText(mini.tree, '接入模型'), JSON.stringify(textsOf(mini.tree).slice(-12)))
+check('卡片里也没有模型清单入口',
+  !byAttr(mini.tree, 'data-dsh-quota-models', 'opencode-go') &&
+    !textsOf(mini.tree).join('').includes('获取模型') &&
+    !textsOf(mini.tree).join('').includes('跟随目录'))
 
 const testButton = findByText(mini.tree, '测试')
 check('有「测试」按钮', Boolean(testButton))

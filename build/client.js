@@ -22,13 +22,6 @@ window.__ModuleLoader__.load({
       predict: '/quota/predict',
       providers: '/quota/providers',
       providersRemove: '/quota/providers/remove',
-      providersAttach: '/quota/providers/attach',
-      providerModels: '/quota/provider/models',
-      providerModelsDiscover: '/quota/provider/models/discover',
-      providerModelsAdd: '/quota/provider/models/add',
-      providerModelsRemove: '/quota/provider/models/remove',
-      providerModelsFollow: '/quota/provider/models/follow',
-      providerModelAuth: '/quota/provider/model/auth',
       loginStart: '/quota/login/start',
       loginStatus: '/quota/login/status',
       loginCancel: '/quota/login/cancel',
@@ -142,33 +135,9 @@ window.__ModuleLoader__.load({
       removeFailed: '移除失败',
       modelReady: '已接入模型',
       modelMissing: '未接入模型',
-      attachModel: '接入模型',
-      attaching: '接入中…',
-      attachDone: '已接入模型选择器',
       quotaOnly: '仅额度',
       quotaOnlyHint: '这家没有可用的模型接口，只在这里盯额度。',
-      modelMissingHint: '这家的模型路由没有挂上（llm-pi-ai 里没有对应条目），模型选择器里看不到它。',
-      modelAuthReady: '模型路由已可用',
-      modelAuthMissing: '模型路由还缺授权',
-      modelAuthSync: '同步登录',
-      modelAuthSyncing: '同步中…',
-      // 模型清单
-      modelsTitle: '模型',
-      modelsFetch: '获取模型',
-      modelsFetching: '获取中…',
-      modelsFetchFailed: '没取到模型列表',
-      modelsAdd: '添加模型',
-      modelsAddId: '模型 id（如 deepseek-v4.1-flash）',
-      modelsAddName: '显示名（可选）',
-      modelsCancel: '取消',
-      modelsSave: '加入',
-      modelsRemove: '删除',
-      modelsEmpty: '这家还没有列出模型',
-      modelsHint: '改过之后这条路由的模型列表就固定下来了（不再跟随 pi-ai 目录）。',
-      modelsFollow: '跟随目录',
-      modelsFollowHint: '这条路由现在用的是手写清单，pi-ai 目录里还有：',
-      modelsCandidates: '厂商说它有这些：',
-      modelsNothingNew: '厂商列出的模型都已经在清单里了。',
+      modelMissingHint: '这家的模型路由没有挂上（llm-pi-ai 里没有对应条目），模型选择器里看不到它。这张卡只读，不改模型路由。',
       noQuota: '这家没有公开的额度接口：这张卡只负责把 key 存进 DSH 凭据库，token 用量看上面的「用量」。',
       testKey: '测试',
       testing: '测试中…',
@@ -304,32 +273,9 @@ window.__ModuleLoader__.load({
       removeFailed: 'Removing failed',
       modelReady: 'models ready',
       modelMissing: 'models missing',
-      attachModel: 'Connect models',
-      attaching: 'Connecting…',
-      attachDone: 'The model selector can see it now',
       quotaOnly: 'quota only',
       quotaOnlyHint: 'This vendor has no usable chat endpoint; the card only tracks allowance.',
-      modelMissingHint: 'No llm-pi-ai entry matches this provider, so the model selector does not list it.',
-      modelAuthReady: 'Model route is ready',
-      modelAuthMissing: 'The model route still needs authorization',
-      modelAuthSync: 'Sync sign-in',
-      modelAuthSyncing: 'Syncing…',
-      modelsTitle: 'Models',
-      modelsFetch: 'Fetch models',
-      modelsFetching: 'Fetching…',
-      modelsFetchFailed: 'The model listing failed',
-      modelsAdd: 'Add model',
-      modelsAddId: 'Model id (e.g. deepseek-v4.1-flash)',
-      modelsAddName: 'Display name (optional)',
-      modelsCancel: 'Cancel',
-      modelsSave: 'Add',
-      modelsRemove: 'Remove',
-      modelsEmpty: 'This route lists no models yet',
-      modelsHint: 'Editing fixes this route’s model list (it stops following the pi-ai catalog).',
-      modelsFollow: 'Follow catalog',
-      modelsFollowHint: 'This route uses a typed list; the pi-ai catalog also has:',
-      modelsCandidates: 'The vendor lists these:',
-      modelsNothingNew: 'Every model the vendor lists is already here.',
+      modelMissingHint: 'No llm-pi-ai entry matches this provider, so the model selector does not list it. This card is read-only and never edits model routes.',
       noQuota: 'No public allowance endpoint: this card only stores the key in the DSH credential store. Token usage is under Usage above.',
       testKey: 'Test',
       testing: 'Testing…',
@@ -1072,286 +1018,6 @@ window.__ModuleLoader__.load({
     }
 
     // —— 一家的模型清单：看 / 获取 / 加 / 删 ——
-    /**
-     * 模型列表写的还是 `llm-pi-ai.providers[provider].models`，所以这里加删的
-     * 就是模型选择器里看到的那份。默认收起：额度页先回答「还剩多少」。
-     */
-    function ModelList(props) {
-      var t = props.t
-      var card = props.card
-      var openPair = React.useState(false)
-      var open = openPair[0]
-      var modelsPair = React.useState(null)
-      var models = modelsPair[0]
-      var busyPair = React.useState('')
-      var busy = busyPair[0]
-      var candidatesPair = React.useState(null)
-      var candidates = candidatesPair[0]
-      var draftPair = React.useState({ id: '', name: '' })
-      var draft = draftPair[0]
-      var addingPair = React.useState(false)
-      var adding = addingPair[0]
-      var errorPair = React.useState('')
-      var error = errorPair[0]
-      var followingPair = React.useState(true)
-      var following = followingPair[0]
-
-      function setError(value) { errorPair[1](value) }
-
-      function load() {
-        return request(ROUTES.providerModels + '?id=' + encodeURIComponent(card.id))
-          .then(function (body) {
-            if (!body) return
-            if (Array.isArray(body.models)) modelsPair[1](body.models)
-            followingPair[1](body.following !== false)
-            setError(body.ok === false ? String(body.error || '') : '')
-          })
-          .catch(function (failure) {
-            setError(failure instanceof Error ? failure.message : String(failure))
-          })
-      }
-
-      // 换了模型路由就重新取：卡片的 id 不变，但它指向的 provider 可能变了。
-      React.useEffect(function () {
-        modelsPair[1](null)
-        candidatesPair[1](null)
-        errorPair[1]('')
-      }, [card.modelProvider])
-
-      React.useEffect(function () {
-        if (open && models === null) void load()
-      }, [open, card.id])
-
-      function editDraft(key, value) {
-        draftPair[1](function (previous) {
-          var next = Object.assign({}, previous)
-          next[key] = value
-          return next
-        })
-      }
-
-      function discover() {
-        busyPair[1]('discover')
-        setError('')
-        postJson(ROUTES.providerModelsDiscover, { id: card.id })
-          .then(function (body) {
-            if (body && body.ok === false) {
-              setError(String(body.error || t('modelsFetchFailed')))
-              return
-            }
-            candidatesPair[1](Array.isArray(body && body.models) ? body.models : [])
-          })
-          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
-          .finally(function () { busyPair[1]('') })
-      }
-
-      function addModel(model) {
-        var id = String((model && model.id) || '').trim()
-        if (id === '') return
-        busyPair[1]('add:' + id)
-        setError('')
-        // 厂商返回的候选还带着上下文窗口与模态：一起交给 Host，采纳时别丢掉。
-        var entry = { id: id }
-        if (typeof model.name === 'string' && model.name.trim() !== '') entry.name = model.name.trim()
-        if (Number.isInteger(model.contextWindow)) entry.contextWindow = model.contextWindow
-        if (Number.isInteger(model.maxTokens)) entry.maxTokens = model.maxTokens
-        var input = Array.isArray(model.input) ? model.input : (Array.isArray(model.inputModalities) ? model.inputModalities : [])
-        if (input.length > 0) entry.input = input
-        postJson(ROUTES.providerModelsAdd, { id: card.id, model: entry })
-          .then(function (body) {
-            if (Array.isArray(body && body.models)) modelsPair[1](body.models)
-            if (candidates) {
-              candidatesPair[1](candidates.filter(function (item) { return item.id !== id }))
-            }
-            draftPair[1]({ id: '', name: '' })
-            addingPair[1](false)
-            if (props.onChanged) props.onChanged()
-          })
-          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
-          .finally(function () { busyPair[1]('') })
-      }
-
-      function removeModel(model) {
-        busyPair[1]('remove:' + model.id)
-        setError('')
-        postJson(ROUTES.providerModelsRemove, { id: card.id, modelId: model.id })
-          .then(function (body) {
-            if (Array.isArray(body && body.models)) modelsPair[1](body.models)
-            if (props.onChanged) props.onChanged()
-          })
-          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
-          .finally(function () { busyPair[1]('') })
-      }
-
-      // 清掉手写清单，让这条路由重新跟着 pi-ai 目录走（目录里有 30 个就显示 30 个）。
-      function followCatalog() {
-        busyPair[1]('follow')
-        setError('')
-        postJson(ROUTES.providerModelsFollow, { id: card.id })
-          .then(function (body) {
-            if (body && body.ok === false) {
-              setError(String(body.error || t('modelsFetchFailed')))
-              return
-            }
-            if (Array.isArray(body && body.models)) modelsPair[1](body.models)
-            candidatesPair[1](null)
-            followingPair[1](true)
-            if (props.onChanged) props.onChanged()
-          })
-          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
-          .finally(function () { busyPair[1]('') })
-      }
-
-      // 把 CLI 里的订阅登录写给模型路由；没有这一步，路由每次请求都答
-      // "Provider is not configured"。
-      function syncAuth() {
-        busyPair[1]('auth')
-        setError('')
-        postJson(ROUTES.providerModelAuth, { id: card.id })
-          .then(function (body) {
-            if (!body || body.ok === false) {
-              setError(String((body && (body.error || body.status)) || t('modelsFetchFailed')))
-              return
-            }
-            if (props.onChanged) props.onChanged()
-          })
-          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
-          .finally(function () { busyPair[1]('') })
-      }
-
-      if (!card.modelProvider || card.inModels === false) return null
-      var known = models || []
-      var loaded = models !== null
-      var missing = (candidates || []).filter(function (item) {
-        return item && typeof item.id === 'string' && !known.some(function (model) { return model.id === item.id })
-      })
-      var smallButton = Object.assign({}, buttonQuiet, { fontSize: '11px', padding: '1px 7px' })
-
-      return h('div', { 'data-dsh-quota-models': card.id, style: { borderTop: '1px solid ' + C.border, paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
-          h('button', {
-            type: 'button',
-            style: Object.assign({}, buttonQuiet, { padding: '1px 4px' }),
-            onClick: function () {
-              var next = !open
-              openPair[1](next)
-              // 展开就取一次；不依赖 effect，收起再展开也能立刻有数。
-              if (next && models === null) void load()
-            },
-          }, (open ? '▾ ' : '▸ ') + t('modelsTitle') + (loaded ? ' · ' + known.length : '')),
-          h('span', { style: { flex: '1' } }),
-          h('button', {
-            type: 'button',
-            style: smallButton,
-            disabled: busy !== '',
-            onClick: discover,
-          }, busy === 'discover' ? t('modelsFetching') : t('modelsFetch')),
-          h('button', {
-            type: 'button',
-            style: smallButton,
-            disabled: busy !== '',
-            onClick: function () { addingPair[1](!adding) },
-          }, adding ? t('modelsCancel') : t('modelsAdd')),
-          following ? null : h('button', {
-            type: 'button',
-            style: smallButton,
-            disabled: busy !== '',
-            onClick: followCatalog,
-            title: t('modelsFollowHint'),
-          }, busy === 'follow' ? t('modelsFetching') : t('modelsFollow'))),
-
-        card.modelAuth
-          ? h('div', { style: { fontSize: '11px', lineHeight: '16px', color: card.modelAuth.ready ? C.minor : C.error, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
-            h('span', null, card.modelAuth.ready ? t('modelAuthReady') : t('modelAuthMissing')),
-            card.modelAuth.ready ? null : h('button', {
-              type: 'button',
-              style: smallButton,
-              disabled: busy !== '',
-              onClick: syncAuth,
-            }, busy === 'auth' ? t('modelAuthSyncing') : t('modelAuthSync')))
-          : null,
-
-        open
-          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-            error ? h('div', { style: { fontSize: '11px', color: C.error, lineHeight: '16px' } }, error) : null,
-
-            !loaded
-              ? h('div', { style: { fontSize: '11px', color: C.minor } }, '…')
-              : known.length === 0
-                ? h('div', { style: { fontSize: '11px', color: C.minor } }, t('modelsEmpty'))
-                : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-                  known.map(function (model) {
-                    var removing = busy === 'remove:' + model.id
-                    return h('div', {
-                      key: model.id,
-                      style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: '0' },
-                    },
-                    h('span', {
-                      style: { fontSize: '12px', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                    }, model.name || model.id),
-                    model.name && model.name !== model.id
-                      ? h('code', { style: { fontSize: '10px', color: C.minor, fontFamily: 'ui-monospace, monospace' } }, model.id)
-                      : null,
-                    h('span', { style: { flex: '1' } }),
-                    h('button', {
-                      type: 'button',
-                      style: smallButton,
-                      disabled: busy !== '',
-                      onClick: function () { removeModel(model) },
-                    }, removing ? '…' : t('modelsRemove')))
-                  })),
-
-            adding
-              ? h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } },
-                h('input', {
-                  value: draft.id,
-                  placeholder: t('modelsAddId'),
-                  onChange: function (event) { editDraft('id', event.target.value) },
-                  style: Object.assign({}, field, { flex: '1', minWidth: '200px' }),
-                }),
-                h('input', {
-                  value: draft.name,
-                  placeholder: t('modelsAddName'),
-                  onChange: function (event) { editDraft('name', event.target.value) },
-                  style: Object.assign({}, field, { width: '150px' }),
-                }),
-                h('button', {
-                  type: 'button',
-                  style: Object.assign({}, smallButton, busy !== '' || draft.id.trim() === '' ? disabledStyle : {}),
-                  disabled: busy !== '' || draft.id.trim() === '',
-                  onClick: function () { addModel({ id: draft.id, name: draft.name }) },
-                }, t('modelsSave')))
-              : null,
-
-            candidates !== null
-              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-                h('div', { style: { fontSize: '11px', color: C.minor } }, t('modelsCandidates')),
-                missing.length === 0
-                  ? h('div', { style: { fontSize: '11px', color: C.minor } }, t('modelsNothingNew'))
-                  : missing.map(function (item) {
-                    var working = busy === 'add:' + item.id
-                    return h('div', {
-                      key: item.id,
-                      style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: '0' },
-                    },
-                    h('span', {
-                      style: { fontSize: '12px', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                    }, item.name || item.id),
-                    h('code', { style: { fontSize: '10px', color: C.minor, fontFamily: 'ui-monospace, monospace' } }, item.id),
-                    h('span', { style: { flex: '1' } }),
-                    h('button', {
-                      type: 'button',
-                      style: smallButton,
-                      disabled: busy !== '',
-                      onClick: function () { addModel(item) },
-                    }, working ? '…' : t('modelsSave')))
-                  }))
-              : null,
-
-            h('div', { style: { fontSize: '10px', color: C.minor, lineHeight: '15px' } }, t('modelsHint')))
-          : null)
-    }
-
     function Card(props) {
       var t = props.t
       var card = props.card
@@ -1391,14 +1057,6 @@ window.__ModuleLoader__.load({
               style: { fontSize: '10px', borderRadius: '4px', padding: '1px 5px', color: C.minor, border: '1px solid ' + C.border },
             }, t('quotaOnly'))
             : null,
-        card.inModels === false && card.modelProvider
-          ? h('button', {
-            type: 'button',
-            style: Object.assign({}, buttonQuiet, { fontSize: '11px', padding: '1px 7px' }),
-            disabled: Boolean(props.busy),
-            onClick: props.onAttach,
-          }, props.busy ? t('attaching') : t('attachModel'))
-          : null,
         card.plan
           ? h('span', { style: { fontSize: '11px', color: C.brand, border: '1px solid ' + C.brand, borderRadius: '999px', padding: '0 6px' } }, t('plan') + ' · ' + card.plan)
           : null,
@@ -1452,8 +1110,6 @@ window.__ModuleLoader__.load({
         ? h('div', { style: { fontSize: '12px', color: C.error, lineHeight: '18px' } },
           (card.missing ? t('missingCredential') + ' — ' + t('missingHint') + ' ' : '') + card.error)
         : null,
-
-      h(ModelList, { t: t, card: card, onChanged: props.onChanged }),
 
       h('div', { style: { borderTop: '1px solid ' + C.border, paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' } },
         h('div', { style: { fontSize: '11px', color: C.minor, textTransform: 'uppercase', letterSpacing: '.04em' } },
@@ -1855,16 +1511,6 @@ window.__ModuleLoader__.load({
       function onClear(card) {
         void run(card.id, postJson(ROUTES.clear, { id: card.id }))
       }
-      function onAttach(card) {
-        setWorking(card.id)
-        postJson(ROUTES.providersAttach, { id: card.id })
-          .then(function () {
-            setNotice(card.id, { text: t('attachDone') })
-            return store.refresh()
-          })
-          .catch(function (error) { noticeError(card.id, error) })
-          .finally(function () { setWorking('') })
-      }
       function onRemove(card) {
         var next = Object.assign({}, logins)
         delete next[card.id]
@@ -1977,8 +1623,6 @@ window.__ModuleLoader__.load({
                   onSignOut: function () { onSignOut(card) },
                   onCancelLogin: function () { onCancelLogin(card) },
                   onRemove: function () { onRemove(card) },
-                  onAttach: function () { onAttach(card) },
-                  onChanged: function () { void store.refresh() },
                   login: logins[card.id] || card.login,
                   notice: notices[card.id],
                 })
