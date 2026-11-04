@@ -572,7 +572,8 @@ export function readCodexAuth(body) {
     ? profile.email
     : typeof claims?.email === 'string' && claims.email !== '' ? claims.email : undefined
   const accountId = typeof tokens.account_id === 'string' && tokens.account_id !== '' ? tokens.account_id : undefined
-  return { token: access, accountId, account, expiresAt: isoTime(claims?.exp) }
+  const refresh = typeof tokens.refresh_token === 'string' && tokens.refresh_token !== '' ? tokens.refresh_token : undefined
+  return { token: access, refresh, accountId, account, expiresAt: isoTime(claims?.exp) }
 }
 
 async function chatGptQuota(target, preset, io) {
@@ -666,8 +667,12 @@ export function readClaudeAuth(body) {
   const token = typeof oauth.accessToken === 'string' ? oauth.accessToken
     : typeof oauth.access_token === 'string' ? oauth.access_token : ''
   if (token === '') return undefined
+  const refresh = typeof oauth.refreshToken === 'string' && oauth.refreshToken !== ''
+    ? oauth.refreshToken
+    : typeof oauth.refresh_token === 'string' && oauth.refresh_token !== '' ? oauth.refresh_token : undefined
   return {
     token,
+    refresh,
     plan: planLabel(oauth.subscriptionType),
     expiresAt: isoTime(oauth.expiresAt),
   }

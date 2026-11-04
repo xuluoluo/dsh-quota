@@ -147,6 +147,7 @@ const cardBase = {
   auth: 'key',
   modelProvider: 'opencode-go',
   inModels: true,
+  modelAuth: { ready: true, status: 'written' },
   keysUrl: 'https://opencode.ai/auth',
   windows: [
     { key: 'rolling', used: 2, resetsAt: '2026-10-20T06:45:48.000Z' },
@@ -280,7 +281,7 @@ let answer = (url, init) => {
     return { ok: true, models: [{ id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }] }
   }
   if (url.includes('/quota/provider/models?')) {
-    return { ok: true, provider: 'opencode-go', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }, { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }] }
+    return { ok: true, provider: 'opencode-go', following: false, models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }, { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash' }] }
   }
   if (url.endsWith('/quota/providers')) return { ok: true }
   if (url.endsWith('/quota/providers/remove')) return { ok: true }
@@ -544,6 +545,16 @@ await removeButton.props.onClick()
 await tick(80)
 check('删除打的是 remove',
   calls.some((call) => call.url.endsWith('/quota/provider/models/remove') && JSON.parse(call.body).modelId === 'deepseek-v4.1-flash'),
+  JSON.stringify(calls.slice(-3)))
+
+check('卡片说清模型路由能不能用', textsOf(section).join('').includes('模型路由已可用'), JSON.stringify(textsOf(section)))
+
+const followButton = findByText(section, '跟随目录')
+check('手写清单的路由给「跟随目录」', Boolean(followButton))
+await followButton.props.onClick()
+await tick(80)
+check('跟随目录打的是 follow',
+  calls.some((call) => call.url.endsWith('/quota/provider/models/follow') && JSON.parse(call.body).id === 'opencode-go'),
   JSON.stringify(calls.slice(-3)))
 
 const testButton = findByText(mini.tree, '测试')

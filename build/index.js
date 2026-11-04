@@ -41,6 +41,8 @@ const ROUTES = Object.freeze({
   providerModelsDiscover: '/quota/provider/models/discover',
   providerModelsAdd: '/quota/provider/models/add',
   providerModelsRemove: '/quota/provider/models/remove',
+  providerModelsFollow: '/quota/provider/models/follow',
+  providerModelAuth: '/quota/provider/model/auth',
   loginStart: '/quota/login/start',
   loginStatus: '/quota/login/status',
   loginCancel: '/quota/login/cancel',
@@ -213,6 +215,66 @@ async function saveXaiGrant(credentials, record, grant) {
     kind: 'grant',
     payload: { type: 'oauth', access: grant.access, refresh: grant.refresh, expires: grant.expires },
   }))
+}
+
+/**
+ * The credential record a catalog route reads. `dsh-llm-pi-ai` keeps its OAuth
+ * grants under `llm-pi-ai/<provider>`, so a subscription token this plugin
+ * already reads from a CLI can also authenticate the route that serves models —
+ * without that record the route is declared but every request answers
+ * "Provider is not configured".
+ */
+function modelRecord(provider) {
+  return `llm-pi-ai/${provider}`
+}
+
+/** The credential shape `dsh-llm-pi-ai` hands pi-ai, from a CLI's own login. */
+function modelGrant(preset, auth) {
+  if (!auth || typeof auth.token !== 'string' || auth.token === '') return undefined
+  if (typeof auth.refresh !== 'string' || auth.refresh === '') return undefined
+  const expires = auth.expiresAt === undefined ? NaN : Date.parse(auth.expiresAt)
+  if (!Number.isFinite(expires)) return undefined
+  const grant = { type: 'oauth', access: auth.token, refresh: auth.refresh, expires }
+  // Codex refuses its own refresh without the account the token belongs to.
+  if (preset?.cliKind === 'codex' && typeof auth.accountId === 'string' && auth.accountId !== '') grant.accountId = auth.accountId
+  return grant
+}
+
+/**
+ * Make one CLI-signed provider usable as a model route.
+ *
+ * A record that is still good is left alone: the user may have signed in
+ * through DSH's own Models page, and that grant can carry a refresh token this
+ * plugin's copy does not. `written` means a grant was stored now, `present`
+ * that the route already had one, `missing` that the CLI holds no renewable
+ * login to copy.
+ */
+async function ensureModelCredential(ctx, preset, target) {
+  const provider = target?.modelProvider
+  if (!provider) return { status: 'no-route' }
+  const credentials = ctx.get('credentials')
+  if (!credentials?.readRecord || !credentials?.modifyRecord) return { status: 'no-store' }
+  const record = modelRecord(provider)
+  let existing
+  try {
+    existing = await credentials.readRecord(record)
+  } catch {
+    existing = undefined
+  }
+  const payload = existing?.payload
+  if (payload && typeof payload.access === 'string' && payload.access !== '') {
+    const expires = typeof payload.expires === 'number' ? payload.expires : 0
+    if (expires === 0 || expires - Date.now() > 60_000) return { status: 'present' }
+  }
+  const auth = await readCliAuth(preset)
+  const grant = modelGrant(preset, auth)
+  if (!grant) return { status: 'missing' }
+  try {
+    await credentials.modifyRecord(record, async () => ({ kind: 'grant', payload: grant }))
+  } catch (error) {
+    return { status: 'refused', error: String(error?.message ?? error) }
+  }
+  return { status: 'written' }
 }
 
 /** What an API-key target resolves to, and where the value came from. */
@@ -509,6 +571,16 @@ function createService(ctx, settings, signIn, usage) {
       writable: credential.writable,
     }
     if (credential.error) card.credential.error = credential.error
+    // A CLI login also has to reach the route that serves models; without a
+    // record there the route answers "Provider is not configured" on every call.
+    if (preset.auth === 'cli' && card.inModels !== false) {
+      const synced = await ensureModelCredential(ctx, preset, target).catch((error) => ({ status: 'refused', error: String(error?.message ?? error) }))
+      card.modelAuth = {
+        ready: synced.status === 'present' || synced.status === 'written',
+        status: synced.status,
+      }
+      if (synced.error) card.modelAuth.error = synced.error
+    }
     if (!credential.token) {
       const fallback = preset.auth === 'cli'
         ? `sign in with the ${preset.label} CLI; this page reads ~/${preset.cliAuth}`
@@ -999,10 +1071,14 @@ function registerRoutes(ctx, service, settings, signIn) {
     const llm = ctx.get('llm')
     if (!llm?.listModels) return jsonError(res, 503, 'this composition mounts no llm service')
     const provider = await resolvedProvider(ctx, target, llm)
+    const { route } = routeConfigOf(ctx, provider)
+    // `following` = no typed list, so the route resolves the installed catalog
+    // and grows with it. The page uses it to offer "follow the catalog".
+    const following = !Array.isArray(route?.models) || route.models.length === 0
     try {
-      sendJson(res, 200, { ok: true, provider, models: await listModels(llm, provider) })
+      sendJson(res, 200, { ok: true, provider, following, models: await listModels(llm, provider) })
     } catch (error) {
-      sendJson(res, 200, { ok: false, provider, models: [], error: String(error?.message ?? error) })
+      sendJson(res, 200, { ok: false, provider, following, models: [], error: String(error?.message ?? error) })
     }
   })
 
@@ -1097,6 +1173,58 @@ function registerRoutes(ctx, service, settings, signIn) {
       if (next.length === 0) return jsonError(res, 400, 'at least one model has to stay on this provider')
       await writeRouteModels(ctx, provider, next)
       sendJson(res, 200, { ok: true, models: next })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
+  // "这条路由别再拿手写的清单了，跟着 pi-ai 目录走。" Removing the key is the
+  // whole edit: a catalog route without `models` resolves the installed
+  // catalog's full list, which is what an upgraded pi-ai would then extend.
+  route(ROUTES.providerModelsFollow, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const target = targetOf(service, body.id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    if (!target.modelProvider) return jsonError(res, 400, 'this provider has no model route')
+    const llm = ctx.get('llm')
+    const provider = await resolvedProvider(ctx, target, llm)
+    const found = modelRouteRow(ctx)
+    if (!found) return jsonError(res, 500, 'this profile keeps no llm-pi-ai row')
+    try {
+      await editEntry(found, (current = {}, inherited = {}) => {
+        const base = { ...inherited, ...current }
+        const providers = { ...(base.providers ?? {}) }
+        const route = { ...(providers[provider] ?? {}) }
+        delete route.models
+        providers[provider] = route
+        return { ...base, providers }
+      })
+      sendJson(res, 200, { ok: true, models: await listModels(llm, provider).catch(() => []) })
+    } catch (error) {
+      jsonError(res, 500, String(error?.message ?? error))
+    }
+  })
+
+  // "把这个 CLI 登录也给模型路由用。" Runs the same sync the snapshot does, so
+  // the page can retry without waiting for the next refresh.
+  route(ROUTES.providerModelAuth, async (req, res) => {
+    if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+    if (!sameOrigin(req)) return forbidden(res, req)
+    const body = await readJson(req)
+    const target = targetOf(service, body.id)
+    if (!target) return jsonError(res, 404, 'unknown-provider')
+    if (!target.modelProvider) return jsonError(res, 400, 'this provider has no model route')
+    const preset = PRESETS[target.preset]
+    if (!preset || preset.auth !== 'cli') return jsonError(res, 400, 'this provider does not sign in through a CLI')
+    try {
+      const synced = await ensureModelCredential(ctx, preset, target)
+      sendJson(res, 200, {
+        ok: synced.status === 'present' || synced.status === 'written',
+        status: synced.status,
+        ...(synced.error === undefined ? {} : { error: synced.error }),
+      })
     } catch (error) {
       jsonError(res, 500, String(error?.message ?? error))
     }

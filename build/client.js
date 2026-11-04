@@ -27,6 +27,8 @@ window.__ModuleLoader__.load({
       providerModelsDiscover: '/quota/provider/models/discover',
       providerModelsAdd: '/quota/provider/models/add',
       providerModelsRemove: '/quota/provider/models/remove',
+      providerModelsFollow: '/quota/provider/models/follow',
+      providerModelAuth: '/quota/provider/model/auth',
       loginStart: '/quota/login/start',
       loginStatus: '/quota/login/status',
       loginCancel: '/quota/login/cancel',
@@ -146,6 +148,10 @@ window.__ModuleLoader__.load({
       quotaOnly: '仅额度',
       quotaOnlyHint: '这家没有可用的模型接口，只在这里盯额度。',
       modelMissingHint: '这家的模型路由没有挂上（llm-pi-ai 里没有对应条目），模型选择器里看不到它。',
+      modelAuthReady: '模型路由已可用',
+      modelAuthMissing: '模型路由还缺授权',
+      modelAuthSync: '同步登录',
+      modelAuthSyncing: '同步中…',
       // 模型清单
       modelsTitle: '模型',
       modelsFetch: '获取模型',
@@ -159,6 +165,8 @@ window.__ModuleLoader__.load({
       modelsRemove: '删除',
       modelsEmpty: '这家还没有列出模型',
       modelsHint: '改过之后这条路由的模型列表就固定下来了（不再跟随 pi-ai 目录）。',
+      modelsFollow: '跟随目录',
+      modelsFollowHint: '这条路由现在用的是手写清单，pi-ai 目录里还有：',
       modelsCandidates: '厂商说它有这些：',
       modelsNothingNew: '厂商列出的模型都已经在清单里了。',
       noQuota: '这家没有公开的额度接口：这张卡只负责把 key 存进 DSH 凭据库，token 用量看上面的「用量」。',
@@ -302,6 +310,10 @@ window.__ModuleLoader__.load({
       quotaOnly: 'quota only',
       quotaOnlyHint: 'This vendor has no usable chat endpoint; the card only tracks allowance.',
       modelMissingHint: 'No llm-pi-ai entry matches this provider, so the model selector does not list it.',
+      modelAuthReady: 'Model route is ready',
+      modelAuthMissing: 'The model route still needs authorization',
+      modelAuthSync: 'Sync sign-in',
+      modelAuthSyncing: 'Syncing…',
       modelsTitle: 'Models',
       modelsFetch: 'Fetch models',
       modelsFetching: 'Fetching…',
@@ -314,6 +326,8 @@ window.__ModuleLoader__.load({
       modelsRemove: 'Remove',
       modelsEmpty: 'This route lists no models yet',
       modelsHint: 'Editing fixes this route’s model list (it stops following the pi-ai catalog).',
+      modelsFollow: 'Follow catalog',
+      modelsFollowHint: 'This route uses a typed list; the pi-ai catalog also has:',
       modelsCandidates: 'The vendor lists these:',
       modelsNothingNew: 'Every model the vendor lists is already here.',
       noQuota: 'No public allowance endpoint: this card only stores the key in the DSH credential store. Token usage is under Usage above.',
@@ -1079,6 +1093,8 @@ window.__ModuleLoader__.load({
       var adding = addingPair[0]
       var errorPair = React.useState('')
       var error = errorPair[0]
+      var followingPair = React.useState(true)
+      var following = followingPair[0]
 
       function setError(value) { errorPair[1](value) }
 
@@ -1087,6 +1103,7 @@ window.__ModuleLoader__.load({
           .then(function (body) {
             if (!body) return
             if (Array.isArray(body.models)) modelsPair[1](body.models)
+            followingPair[1](body.following !== false)
             setError(body.ok === false ? String(body.error || '') : '')
           })
           .catch(function (failure) {
@@ -1166,8 +1183,43 @@ window.__ModuleLoader__.load({
           .finally(function () { busyPair[1]('') })
       }
 
-      if (!card.modelProvider || card.inModels === false) return null
+      // 清掉手写清单，让这条路由重新跟着 pi-ai 目录走（目录里有 30 个就显示 30 个）。
+      function followCatalog() {
+        busyPair[1]('follow')
+        setError('')
+        postJson(ROUTES.providerModelsFollow, { id: card.id })
+          .then(function (body) {
+            if (body && body.ok === false) {
+              setError(String(body.error || t('modelsFetchFailed')))
+              return
+            }
+            if (Array.isArray(body && body.models)) modelsPair[1](body.models)
+            candidatesPair[1](null)
+            followingPair[1](true)
+            if (props.onChanged) props.onChanged()
+          })
+          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
+          .finally(function () { busyPair[1]('') })
+      }
 
+      // 把 CLI 里的订阅登录写给模型路由；没有这一步，路由每次请求都答
+      // "Provider is not configured"。
+      function syncAuth() {
+        busyPair[1]('auth')
+        setError('')
+        postJson(ROUTES.providerModelAuth, { id: card.id })
+          .then(function (body) {
+            if (!body || body.ok === false) {
+              setError(String((body && (body.error || body.status)) || t('modelsFetchFailed')))
+              return
+            }
+            if (props.onChanged) props.onChanged()
+          })
+          .catch(function (failure) { setError(failure instanceof Error ? failure.message : String(failure)) })
+          .finally(function () { busyPair[1]('') })
+      }
+
+      if (!card.modelProvider || card.inModels === false) return null
       var known = models || []
       var loaded = models !== null
       var missing = (candidates || []).filter(function (item) {
@@ -1199,7 +1251,25 @@ window.__ModuleLoader__.load({
             style: smallButton,
             disabled: busy !== '',
             onClick: function () { addingPair[1](!adding) },
-          }, adding ? t('modelsCancel') : t('modelsAdd'))),
+          }, adding ? t('modelsCancel') : t('modelsAdd')),
+          following ? null : h('button', {
+            type: 'button',
+            style: smallButton,
+            disabled: busy !== '',
+            onClick: followCatalog,
+            title: t('modelsFollowHint'),
+          }, busy === 'follow' ? t('modelsFetching') : t('modelsFollow'))),
+
+        card.modelAuth
+          ? h('div', { style: { fontSize: '11px', lineHeight: '16px', color: card.modelAuth.ready ? C.minor : C.error, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+            h('span', null, card.modelAuth.ready ? t('modelAuthReady') : t('modelAuthMissing')),
+            card.modelAuth.ready ? null : h('button', {
+              type: 'button',
+              style: smallButton,
+              disabled: busy !== '',
+              onClick: syncAuth,
+            }, busy === 'auth' ? t('modelAuthSyncing') : t('modelAuthSync')))
+          : null,
 
         open
           ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },

@@ -158,10 +158,23 @@ ali:
 | `xai-billing`（Grok） | 补 `xai: {}`，认证走登录记录（写 `apiKeyEnv` 会盖掉登录，所以不写） |
 | `bailian` | 目录里没有：写完整路由（`api` / `baseURL` / `models`） |
 | `commandcode` | 没有可用的聊天接口：只做额度，卡片上标「仅额度」 |
-| `chatgpt` | 接入 `openai-codex` 目录路由，不写 API key；额度读取 Codex 本机登录 |
-| `claude` | 接入 `anthropic` 目录路由，不写 API key；额度读取 Claude Code 本机登录 |
+| `chatgpt` | 接入 `openai-codex` 目录路由，不写 API key；额度读取 Codex 本机登录，并把同一份登录同步成模型凭据 |
+| `claude` | 接入 `anthropic` 目录路由，不写 API key；额度读取 Claude Code 本机登录，同样同步凭据 |
 
-额度读取和模型认证是两套登录：接入模型后，前往 DSH 的模型供应商设置完成对应 OAuth 登录。插件不会复制 CLI 令牌到模型凭据库。既有路由会保留原配置；如果已有 `apiKeyEnv`，它会优先于 OAuth，可能使用 API 计费。Codex 的目录路由由上游标为 legacy；Claude 订阅是否能在第三方客户端使用取决于供应商当前政策和服务端。`CODEX_HOME` 和 `CLAUDE_CONFIG_DIR` 可指定 CLI 登录目录。
+**订阅登录会写两处**：额度读的是 CLI 自己的文件，模型路由读的是凭据库里的
+`llm-pi-ai/<provider>` 记录。只读 CLI 不写记录，模型选择器里能看见路由却每次请求都答
+`Provider is not configured` —— 所以插件在刷新快照时会把 CLI 的 access / refresh /
+（Codex 需要的）accountId 写进那条记录，卡片上写「模型路由已可用」；没写成功时卡片直接
+红字提示，并给一个「同步登录」按钮重试。已经有效、未过期的记录不会被覆盖（那可能是你在
+Models 页自己登录的，refresh token 更完整）。既有路由保留原配置；如果已有 `apiKeyEnv`，
+它会优先于 OAuth，可能使用 API 计费。Codex 的目录路由由上游标为 legacy；Claude 订阅是否
+能在第三方客户端使用取决于供应商当前政策和服务端。`CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`
+可指定 CLI 登录目录。
+
+**模型清单只有一个来源**：profile 里给目录路由手写 `models:` 会让那条路由从此不再跟着
+pi-ai 目录长（目录里 30 个，选择器里只剩你抄过的 2 个）。插件写路由时不写 `models`，
+「获取模型」对目录路由直接回目录；卡片里那条路由如果还留着旧的手写清单，头部会出现
+「跟随目录」，点一下删掉它、模型数立刻回到目录值。
 
 写失败时额度行不会落盘 —— 不会出现「卡片有、模型里没有」的半截状态。与凭据有关的规则
 没变：**`apiKeyEnv` 填的是名字，不是 key**（填成 key 会被 400 拒掉；配置里已经是 key 形状

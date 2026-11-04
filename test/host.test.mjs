@@ -574,6 +574,110 @@ check('删除不存在的模型回 404',
 check('不能把最后一条删掉',
   (await modelCall(ROUTES.providerModelsRemove, { method: 'POST', body: { id: 'opencode-go', modelId: 'new-model' } })).status === 400)
 
+// —— 跟随目录：手写的 models 删掉，路由重新跟 pi-ai 目录 ——
+// 这是「很多大模型都缺少了」的那一半：只要 profile 里留着手写清单，路由就
+// 不再长；删掉它，模型数是目录里有多少就是多少。
+const followRows = [
+  {
+    options: {
+      id: 'llm-pi-ai',
+      name: '@deepseek-ai/dsh-llm-pi-ai',
+      config: {
+        providers: {
+          'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'only-one', name: 'Only One' }] },
+        },
+      },
+    },
+  },
+  {
+    options: {
+      id: 'dsh-quota',
+      name: 'dsh-allowance',
+      config: { providers: [{ id: 'opencode-go', preset: 'opencode-go' }] },
+    },
+  },
+]
+const followRoutes = new Map()
+const followEditor = {
+  entries: () => followRows,
+  async edit(entry, change) {
+    const next = change(structuredClone(entry.options.config ?? {}), {})
+    entry.options.config = next
+    return next
+  },
+}
+const catalog = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+apply({
+  logger: ctx.logger,
+  get: (name) => {
+    if (name === 'llm') return { listProviders: async () => [{ id: 'opencode-go' }], listModels: async () => catalog }
+    if (name === 'configEditor') return followEditor
+    if (name === 'credentials') return credentials
+    return undefined
+  },
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { followRoutes.set(route.path, route.handler); return () => {} } },
+}, followRows[1].options.config)
+
+const typed = await callOn(followRoutes, ROUTES.providerModels, { url: `${ROUTES.providerModels}?id=opencode-go` })
+check('手写清单在时 GET 说自己在跟随：false', typed.json.following === false, JSON.stringify(typed.json))
+
+const followed = await callOn(followRoutes, ROUTES.providerModelsFollow, { method: 'POST', body: { id: 'opencode-go' } })
+check('跟随目录删掉手写 models 并回到目录清单',
+  followed.status === 200 && followed.json.models.length === 3 &&
+    followRows[0].options.config.providers['opencode-go'].models === undefined &&
+    followRows[0].options.config.providers['opencode-go'].apiKeyEnv === 'OPENCODE_GO_API_KEY',
+  JSON.stringify({ followed: followed.json, config: followRows[0].options.config }))
+
+// —— 把 CLI 登录也写给模型路由 ——
+// 不写这条记录，router 每次请求都答 "Provider is not configured"。
+const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quota-codex-'))
+fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({
+  tokens: {
+    access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+    refresh_token: 'refresh-codex',
+    account_id: 'acct-codex',
+  },
+}))
+const previousCodexHome = process.env.CODEX_HOME
+process.env.CODEX_HOME = codexHome
+
+const authRows = [
+  { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'openai-codex': {} } } } },
+  { options: { id: 'dsh-quota', name: 'dsh-allowance', config: { providers: [{ id: 'chatgpt', preset: 'chatgpt' }] } } },
+]
+const authRoutes = new Map()
+apply({
+  logger: ctx.logger,
+  get: (name) => {
+    if (name === 'llm') return { listProviders: async () => [{ id: 'openai-codex' }], listModels: async () => [] }
+    if (name === 'credentials') return credentials
+    return undefined
+  },
+  effect: (fn) => fn(),
+  on: () => () => {},
+  webServer: { register: (route) => { authRoutes.set(route.path, route.handler); return () => {} } },
+}, authRows[1].options.config)
+
+const synced = await callOn(authRoutes, ROUTES.providerModelAuth, { method: 'POST', body: { id: 'chatgpt' } })
+const stored = records.get('llm-pi-ai/openai-codex')
+check('同步登录把 CLI 的订阅写成模型路由的 grant',
+  synced.status === 200 && synced.json.status === 'written' &&
+    stored?.kind === 'grant' && stored.payload.type === 'oauth' &&
+    stored.payload.access === jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }) &&
+    stored.payload.refresh === 'refresh-codex' && stored.payload.accountId === 'acct-codex',
+  JSON.stringify({ synced: synced.json, stored: stored === undefined ? null : { kind: stored.kind, payload: Object.keys(stored.payload ?? {}) } }))
+
+const again = await callOn(authRoutes, ROUTES.providerModelAuth, { method: 'POST', body: { id: 'chatgpt' } })
+check('还有效的 grant 不被覆盖', again.json.status === 'present' && records.get('llm-pi-ai/openai-codex') === stored)
+
+records.delete('llm-pi-ai/openai-codex')
+fs.rmSync(codexHome, { recursive: true, force: true })
+if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+else process.env.CODEX_HOME = previousCodexHome
+
+
 // —— 没有凭据服务：说清楚，而不是崩 ——
 const bareRoutes = new Map()
 apply({
